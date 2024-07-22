@@ -1,1 +1,56 @@
+# Python-related files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# PyInstaller-related files
+build/
 dist/
+*.spec
+
+# IDE-related files (for common IDEs)
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS-related files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Other common files to ignore
+*.csv
+*.dat
+*.out

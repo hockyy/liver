@@ -58,7 +58,7 @@ class SubtitleTranscriber:
             return
 
         command = [
-            'whisper-faster.exe', audio_file,
+            'Faster-Whisper-XXL.exe', audio_file,
             '--model', self.model,
             '--device', self.device,
             '--output_dir', output_dir,
@@ -67,7 +67,9 @@ class SubtitleTranscriber:
             '--beam_size', str(beam_size),
             '--language', lang,
             '--verbose', 'true',
-            '--standard_asia'
+            '--vad_filter', 'true',
+            '--vad_alt_method', 'silero_v4',
+            '--standard_asia',
         ]
 
         log_callback(f"Starting transcription for {audio_file}\n")
