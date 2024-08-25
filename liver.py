@@ -7,21 +7,41 @@ from datetime import timedelta
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import customtkinter as ctk
-from googletrans import Translator
-import logging
-from httpx import Timeout
+import codecs
+import sys
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Suppress googletrans debug messages
-logging.getLogger("googletrans").setLevel(logging.ERROR)
-
-# Optionally, suppress httpx debug messages as well
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
 # Regular expression to match subtitle lines
 SUBTITLE_REGEX = re.compile(r'^\[(\d+):(\d{2}\.\d{3}) --> (\d+):(\d{2}\.\d{3})\] (.+)$')
+
+
+def clean_srt(file_path):
+    try:
+        with codecs.open(file_path, 'r', encoding='utf-8-sig') as file:
+            content = file.read()
+    except UnicodeDecodeError:
+        with codecs.open(file_path, 'r', encoding='iso-8859-1') as file:
+            content = file.read()
+
+    # Remove BOM if present
+    content = content.lstrip('\ufeff')
+
+    # Remove non-printable characters except newlines and CJK characters
+    content = re.sub(r'[^\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uff00-\uffef\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7af\u4e00-\u9fff\x20-\x7E\n]', '', content)
+
+    # Fix common encoding issues
+    content = content.replace('â€™', "'")
+    content = content.replace('â€"', "–")
+    content = content.replace('â€œ', '"')
+    content = content.replace('â€', '"')
+
+    with codecs.open(file_path, 'w', encoding='utf-8') as file:
+        file.write(content)
+
+    print(f"Cleaned SRT file has been saved as {file_path}")
 
 def format_timestamp(seconds):
     delta = timedelta(seconds=seconds)
@@ -44,8 +64,6 @@ class SubtitleTranscriber:
         self.device = device
         self.stop_flag = threading.Event()
         self.thread = None
-        self.translator = Translator(timeout=Timeout(10.0))  # Add a timeout
-        self.translation_thread = None
 
     def transcribe_and_write_srt_live(self, audio_file, log_callback, lang, beam_size):
         output_dir = os.path.dirname(audio_file)
@@ -65,15 +83,22 @@ class SubtitleTranscriber:
             '--output_format', 'srt',
             '--task', 'transcribe',
             '--beam_size', str(beam_size),
-            '--language', lang,
             '--verbose', 'true',
             '--vad_filter', 'true',
             '--vad_alt_method', 'silero_v4',
             '--standard_asia',
         ]
 
+        # Add language parameter only if the model is not cantonese-scrya
+        if self.model != "cantonese-scrya":
+            command.extend(['--language', lang])
+
         log_callback(f"Starting transcription for {audio_file}\n")
         log_callback(f"Command: {' '.join(command)}\n")
+
+        if os.path.exists(cjk_srt_file):
+            log_callback(f"Transcription exist, file saved at {cjk_srt_file}\n")
+            return
 
         try:
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
@@ -104,10 +129,15 @@ class SubtitleTranscriber:
         process.stdout.close()
         process.wait()
 
-        os.remove(cjk_tmp_srt_file)
-
         if os.path.exists(cjk_srt_file):
             log_callback(f"Transcription completed. SRT file saved at {cjk_srt_file}\n")
+            try:
+                clean_srt(cjk_srt_file)
+                log_callback(f"Cleaned {cjk_srt_file}\n")
+                os.remove(cjk_tmp_srt_file)
+                log_callback(f"Removed {cjk_tmp_srt_file}\n")
+            except:
+                pass
         else:
             log_callback("Transcription failed or was stopped before completion.\n")
 
@@ -127,80 +157,44 @@ class SubtitleTranscriber:
         else:
             logger.info("No transcription process is running.")
 
-    def translate_srt(self, srt_file, target_lang, log_callback):
-        if not os.path.exists(srt_file):
-            log_callback(f"SRT file not found: {srt_file}\n")
-            return
-
-        output_file = srt_file.replace('.srt', f'.{target_lang}.srt')
-        
-        with open(srt_file, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        translated_lines = []
-        i = 0
-        while i < len(lines):
-            if lines[i].strip().isdigit():  # Subtitle number
-                translated_lines.extend(lines[i:i+2])  # Keep number and timestamp
-                i += 2
-                text_lines = []
-                while i < len(lines) and lines[i].strip():
-                    text_lines.append(lines[i].strip())
-                    i += 1
-                text = ' '.join(text_lines)
-                translated_text = self.translator.translate(text, dest=target_lang).text
-                translated_lines.append(f"{translated_text}\n\n")
-            else:
-                translated_lines.append(lines[i])
-                i += 1
-
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.writelines(translated_lines)
-
-        log_callback(f"Translation completed. Translated SRT file saved at {output_file}\n")
-
-    def start_translation(self, srt_file, target_lang, log_callback):
-        if self.translation_thread and self.translation_thread.is_alive():
-            log_callback("Translation is already running.\n")
-            return
-
-        self.translation_thread = threading.Thread(target=self.translate_srt, args=(srt_file, target_lang, log_callback))
-        self.translation_thread.start()
-
 class TranscriptionApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("Subtitle Transcriber and Translator")
-        self.geometry("600x700")
+        self.title("Subtitle Transcriber")
+        self.geometry("800x800")
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(6, weight=1)
+        self.grid_rowconfigure(8, weight=1)
 
         self.create_widgets()
         self.transcriber = SubtitleTranscriber()
+        self.queue = []
+        self.is_processing = False
 
     def create_widgets(self):
-        # Language selection
-        self.language_var = tk.StringVar(value='yue')
-        language_frame = ctk.CTkFrame(self)
-        language_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkLabel(language_frame, text="Source Language:").pack(side="left", padx=5)
-        languages = ['ja', 'zh', 'yue']
-        language_menu = ctk.CTkOptionMenu(language_frame, variable=self.language_var, values=languages)
-        language_menu.pack(side="left", padx=5)
+        # Model selection
+        self.model_var = tk.StringVar(value='large-v3')
+        model_frame = ctk.CTkFrame(self)
+        model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        ctk.CTkLabel(model_frame, text="Model:").pack(side="left", padx=5)
+        models = ['large-v3', 'cantonese-scrya']
+        model_menu = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, command=self.update_language_menu)
+        model_menu.pack(side="left", padx=5)
 
-        # Target language selection
-        self.target_language_var = tk.StringVar(value='en')
-        target_language_frame = ctk.CTkFrame(self)
-        target_language_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkLabel(target_language_frame, text="Target Language:").pack(side="left", padx=5)
-        target_languages = ['en', 'ja', 'zh-cn', 'yue']
-        target_language_menu = ctk.CTkOptionMenu(target_language_frame, variable=self.target_language_var, values=target_languages)
-        target_language_menu.pack(side="left", padx=5)
+        # Language selection
+        self.filename_var = tk.StringVar(value='')
+        self.language_var = tk.StringVar(value='yue')
+        self.language_frame = ctk.CTkFrame(self)
+        self.language_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+        self.language_label = ctk.CTkLabel(self.language_frame, text="Source Language:")
+        self.language_label.pack(side="left", padx=5)
+        self.languages = ['en', 'ja', 'zh', 'yue']
+        self.language_menu = ctk.CTkOptionMenu(self.language_frame, variable=self.language_var, values=self.languages)
+        self.language_menu.pack(side="left", padx=5)
 
         # Beam size
         self.beam_size_var = tk.StringVar(value='3')
@@ -211,57 +205,111 @@ class TranscriptionApp(ctk.CTk):
         beam_entry.pack(side="left", padx=5)
 
         # File selection
-        self.filename_var = tk.StringVar()
         file_frame = ctk.CTkFrame(self)
         file_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
-        ctk.CTkLabel(file_frame, text="File:").pack(side="left", padx=5)
-        file_entry = ctk.CTkEntry(file_frame, textvariable=self.filename_var, width=300)
-        file_entry.pack(side="left", padx=5, expand=True, fill="x")
-        browse_button = ctk.CTkButton(file_frame, text="Browse", command=self.browse_file)
+        ctk.CTkLabel(file_frame, text="Files in Queue:").pack(side="left", padx=5)
+        self.queue_listbox = tk.Listbox(file_frame, width=50, height=5)
+        self.queue_listbox.pack(side="left", padx=5, expand=True, fill="both")
+        file_scrollbar = ttk.Scrollbar(file_frame, orient="vertical", command=self.queue_listbox.yview)
+        file_scrollbar.pack(side="left", fill="y")
+        self.queue_listbox.config(yscrollcommand=file_scrollbar.set)
+        browse_button = ctk.CTkButton(file_frame, text="Add Files", command=self.browse_and_add_files)
         browse_button.pack(side="left", padx=5)
-
+        remove_button = ctk.CTkButton(file_frame, text="Remove Selected", command=self.remove_selected_files)
+        remove_button.pack(side="left", padx=5)
         # Control buttons
         button_frame = ctk.CTkFrame(self)
         button_frame.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
-        start_button = ctk.CTkButton(button_frame, text="Start Transcription", command=self.start_transcription)
+        start_button = ctk.CTkButton(button_frame, text="Start Processing", command=self.start_processing)
         start_button.pack(side="left", padx=5, expand=True, fill="x")
-        stop_button = ctk.CTkButton(button_frame, text="Stop Transcription", command=self.stop_transcription)
-        stop_button.pack(side="left", padx=5, expand=True, fill="x")
-        translate_button = ctk.CTkButton(button_frame, text="Translate", command=self.translate_srt)
-        translate_button.pack(side="left", padx=5, expand=True, fill="x")
 
         # Progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self, variable=self.progress_var, maximum=100)
         self.progress_bar.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
 
+        # Queue list
+        self.queue_frame = ctk.CTkFrame(self)
+        self.queue_frame.grid(row=6, column=0, padx=10, pady=10, sticky="nsew")
+        self.queue_frame.grid_columnconfigure(0, weight=1)
+        self.queue_frame.grid_rowconfigure(0, weight=1)
+
+        self.queue_list = tk.Listbox(self.queue_frame, selectmode=tk.SINGLE)
+        self.queue_list.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+
+        queue_scrollbar = ttk.Scrollbar(self.queue_frame, orient="vertical", command=self.queue_list.yview)
+        queue_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.queue_list.configure(yscrollcommand=queue_scrollbar.set)
+
         # Log text area
-        self.log_text = scrolledtext.ScrolledText(self, wrap='word', width=70, height=20)
-        self.log_text.grid(row=6, column=0, padx=10, pady=10, sticky="nsew")
+        self.log_text = scrolledtext.ScrolledText(self, wrap='word', width=70, height=15)
+        self.log_text.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
 
-    def browse_file(self):
-        initial_dir = os.path.dirname(self.filename_var.get()) if self.filename_var.get() else os.path.expanduser("~")
-        filename = filedialog.askopenfilename(filetypes=[("Audio/Video Files", "*.mp4 *.wav *.mp3 *.srt")], initialdir=initial_dir)
-        if filename:
-            self.filename_var.set(filename)
+    def update_language_menu(self, *args):
+        if self.model_var.get() == 'cantonese-scrya':
+            self.language_label.pack_forget()
+            self.language_menu.pack_forget()
+        else:
+            self.language_label.pack(side="left", padx=5)
+            self.language_menu.pack(side="left", padx=5)
+    def browse_and_add_files(self):
+        initial_dir = os.path.expanduser("~")
+        filenames = filedialog.askopenfilenames(filetypes=[("Audio/Video Files", "*.mkv *.mp4 *.wav *.mp3 *.srt")], initialdir=initial_dir)
+        for filename in filenames:
+            if filename not in self.queue:
+                self.queue.append(filename)
+                self.queue_listbox.insert(tk.END, filename)
+                self.log_callback(f"Added to queue: {filename}\n")
 
-    def start_transcription(self):
-        audio_file = self.filename_var.get()
-        if not audio_file:
-            messagebox.showerror("Error", "Please select a file.")
+    def remove_selected_files(self):
+        selected_indices = self.queue_listbox.curselection()
+        for index in reversed(selected_indices):
+            file_path = self.queue_listbox.get(index)
+            self.queue.remove(file_path)
+            self.queue_listbox.delete(index)
+            self.log_callback(f"Removed from queue: {file_path}\n")
+
+    def start_processing(self):
+        if self.is_processing:
+            self.log_callback("Transcription is already in progress.\n")
             return
-        self.log_text.delete(1.0, tk.END)
-        self.transcriber.start_transcription(audio_file, self.log_callback, self.language_var.get(), self.beam_size_var.get())
+        if not self.queue:
+            self.log_callback("No files to process. Please select a file or add files to the queue.\n")
+            return
+        self.is_processing = True
+        self.process_next_in_queue()
 
-    def stop_transcription(self):
+    def process_next_in_queue(self):
+        if not self.queue:
+            self.is_processing = False
+            self.log_callback("All transcriptions completed.\n")
+            return
+
+        file_path = self.queue.pop(0)
+        self.queue_list.delete(0)
+        self.filename_var.set(file_path)
+        self.log_callback(f"Processing: {file_path}\n")
+        
+        self.transcriber.model = self.model_var.get()
+        lang = self.language_var.get() if self.model_var.get() != 'cantonese-scrya' else ''
+        self.transcriber.start_transcription(file_path, self.log_callback, lang, self.beam_size_var.get())
+        self.after(100, self.check_transcription_status)
+
+    def check_transcription_status(self):
+        if self.transcriber.thread and self.transcriber.thread.is_alive():
+            self.after(100, self.check_transcription_status)
+        else:
+            self.log_callback(f"Finished processing: {self.queue[0]}\n")
+            self.queue.pop(0)  # Remove the processed file
+            self.queue_listbox.delete(0)  # Remove the first item from the listbox
+            self.process_next_in_queue()
+
+    def stop_processing(self):
         self.transcriber.stop_transcription()
-
-    def translate_srt(self):
-        srt_file = self.filename_var.get().replace('.mp4', '.srt').replace('.wav', '.srt').replace('.mp3', '.srt')
-        if not os.path.exists(srt_file):
-            messagebox.showerror("Error", "SRT file not found. Please transcribe first.")
-            return
-        self.transcriber.start_translation(srt_file, self.target_language_var.get(), self.log_callback)
+        self.is_processing = False
+        self.queue.clear()
+        self.queue_list.delete(0, tk.END)
+        self.log_callback("Transcription stopped. Queue processing interrupted.\n")
 
     def log_callback(self, message):
         self.log_text.insert(tk.END, message)
