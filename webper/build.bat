@@ -1,10 +1,10 @@
 @echo off
 
 :: Name of your Python script
-set SCRIPT_NAME=trayue.py
+set SCRIPT_NAME=webper.py
 
 :: Name of your icon file (should be in .ico format)
-set ICON_FILE=trayue.ico
+set ICON_FILE=webper.ico
 
 :: Check if PyInstaller is installed
 pyinstaller --version >nul 2>&1
