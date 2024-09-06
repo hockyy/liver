@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 class TranslatorThread(QThread):
     update_signal = pyqtSignal(int, str)
     error_signal = pyqtSignal(str)
+    finished_signal = pyqtSignal()
     
     def __init__(self, rows, texts, source_lang, target_lang, translate_func):
         QThread.__init__(self)
@@ -16,10 +17,13 @@ class TranslatorThread(QThread):
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.translate_func = translate_func
+        self.stop_flag = False
 
     def run(self):
         try:
             for row, text in zip(self.rows, self.texts):
+                if self.stop_flag:
+                    break
                 translated_text = self.translate_func(text, self.source_lang, self.target_lang)
                 if translated_text.startswith("Error:"):
                     self.error_signal.emit(translated_text)
@@ -27,7 +31,12 @@ class TranslatorThread(QThread):
                 self.update_signal.emit(row, translated_text)
         except Exception as e:
             self.error_signal.emit(f"Error: {str(e)}")
+        finally:
+            self.finished_signal.emit()
 
+    def stop(self):
+        self.stop_flag = True
+        
 class TranslatorApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -67,6 +76,12 @@ class TranslatorApp(QWidget):
         self.blockTranslateBtn = QPushButton('Block Translate')
         self.blockTranslateBtn.clicked.connect(self.block_translate)
         button_layout.addWidget(self.blockTranslateBtn)
+
+        # Stop button
+        self.stopBtn = QPushButton('Stop Translation')
+        self.stopBtn.clicked.connect(self.stop_translation)
+        self.stopBtn.setEnabled(False)  # Disable the button initially
+        button_layout.addWidget(self.stopBtn)
 
         # Save button
         self.saveBtn = QPushButton('Save Translated SRT')
@@ -155,7 +170,13 @@ class TranslatorApp(QWidget):
         self.translate_thread = TranslatorThread(rows, texts, 'yue', 'en', self.google_translate)
         self.translate_thread.update_signal.connect(self.update_translation)
         self.translate_thread.error_signal.connect(self.show_error_message)
+        self.translate_thread.finished_signal.connect(self.translation_finished)
         self.translate_thread.start()
+
+        # Disable translate buttons and enable stop button
+        self.translateAllBtn.setEnabled(False)
+        self.blockTranslateBtn.setEnabled(False)
+        self.stopBtn.setEnabled(True)
 
     def block_translate(self):
         selected_ranges = self.subtitleTable.selectedRanges()
@@ -167,13 +188,37 @@ class TranslatorApp(QWidget):
         texts = []
         for range_ in selected_ranges:
             for row in range(range_.topRow(), range_.bottomRow() + 1):
-                rows.append(row)
-                texts.append(self.subtitleTable.item(row, 2).text())
+                translated_text = self.subtitleTable.item(row, 3).text()
+                if not translated_text:  # Check if the translation is empty
+                    rows.append(row)
+                    texts.append(self.subtitleTable.item(row, 2).text())
         
+        if not texts:
+            QMessageBox.information(self, "Information", "All selected lines have already been translated.")
+            return
+
         self.translate_thread = TranslatorThread(rows, texts, 'yue', 'en', self.google_translate)
         self.translate_thread.update_signal.connect(self.update_translation)
         self.translate_thread.error_signal.connect(self.show_error_message)
+        self.translate_thread.finished_signal.connect(self.translation_finished)
         self.translate_thread.start()
+
+        # Disable translate buttons and enable stop button
+        self.translateAllBtn.setEnabled(False)
+        self.blockTranslateBtn.setEnabled(False)
+        self.stopBtn.setEnabled(True)
+
+    def stop_translation(self):
+        if self.translate_thread and self.translate_thread.isRunning():
+            self.translate_thread.stop()
+            self.stopBtn.setEnabled(False)  # Disable the stop button immediately
+
+    def translation_finished(self):
+        # Re-enable translate buttons and disable stop button
+        self.translateAllBtn.setEnabled(True)
+        self.blockTranslateBtn.setEnabled(True)
+        self.stopBtn.setEnabled(False)
+        QMessageBox.information(self, "Information", "Translation process finished.")
 
     def show_error_message(self, error_message):
         QMessageBox.critical(self, "Error", error_message)
