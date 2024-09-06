@@ -7,6 +7,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 class TranslatorThread(QThread):
     update_signal = pyqtSignal(int, str)
+    error_signal = pyqtSignal(str)
     
     def __init__(self, rows, texts, source_lang, target_lang, translate_func):
         QThread.__init__(self)
@@ -17,9 +18,15 @@ class TranslatorThread(QThread):
         self.translate_func = translate_func
 
     def run(self):
-        for row, text in zip(self.rows, self.texts):
-            translated_text = self.translate_func(text, self.source_lang, self.target_lang)
-            self.update_signal.emit(row, translated_text)
+        try:
+            for row, text in zip(self.rows, self.texts):
+                translated_text = self.translate_func(text, self.source_lang, self.target_lang)
+                if translated_text.startswith("Error:"):
+                    self.error_signal.emit(translated_text)
+                    return
+                self.update_signal.emit(row, translated_text)
+        except Exception as e:
+            self.error_signal.emit(f"Error: {str(e)}")
 
 class TranslatorApp(QWidget):
     def __init__(self):
@@ -101,33 +108,53 @@ class TranslatorApp(QWidget):
         self.subtitleTable.setItem(row, 3, QTableWidgetItem(translated_text))
 
     def google_translate(self, text, source_lang, target_lang):
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {
-            "client": "gtx",
-            "sl": source_lang,
-            "tl": target_lang,
-            "dt": "t",
-            "q": text
-        }
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        }
-        
-        response = requests.get(url, params=params, headers=headers)
-        
-        if response.status_code == 200:
-            result = json.loads(response.text)
-            translated_text = ''.join([sentence[0] for sentence in result[0]])
-            return translated_text
-        else:
-            raise Exception(f"Translation request failed with status code: {response.status_code}")
+        if not text or text.strip() == '':
+            return ''
+        try:
+            url = "https://translate.googleapis.com/translate_a/single"
+            params = {
+                "client": "gtx",
+                "sl": source_lang,
+                "tl": target_lang,
+                "dt": "t",
+                "q": text
+            }
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            }
+            
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                result = json.loads(response.text)
+                translated_text = ''.join([sentence[0] for sentence in result[0]])
+                return translated_text
+            else:
+                return f"Error: Translation request failed with status code: {response.status_code}"
+        except requests.RequestException as e:
+            return f"Error: {str(e)}"
+        except json.JSONDecodeError:
+            return "Error: Failed to decode JSON response"
+        except Exception as e:
+            return f"Error: {str(e)}"
 
     def translate_all(self):
-        rows = range(self.subtitleTable.rowCount())
-        texts = [self.subtitleTable.item(row, 2).text() for row in rows]
+        rows = []
+        texts = []
+        for row in range(self.subtitleTable.rowCount()):
+            translated_text = self.subtitleTable.item(row, 3).text()
+            if not translated_text:  # Check if the translation is empty
+                rows.append(row)
+                texts.append(self.subtitleTable.item(row, 2).text())
+        
+        if not texts:
+            QMessageBox.information(self, "Information", "All lines have already been translated.")
+            return
+
         self.translate_thread = TranslatorThread(rows, texts, 'yue', 'en', self.google_translate)
         self.translate_thread.update_signal.connect(self.update_translation)
+        self.translate_thread.error_signal.connect(self.show_error_message)
         self.translate_thread.start()
 
     def block_translate(self):
@@ -145,7 +172,11 @@ class TranslatorApp(QWidget):
         
         self.translate_thread = TranslatorThread(rows, texts, 'yue', 'en', self.google_translate)
         self.translate_thread.update_signal.connect(self.update_translation)
+        self.translate_thread.error_signal.connect(self.show_error_message)
         self.translate_thread.start()
+
+    def show_error_message(self, error_message):
+        QMessageBox.critical(self, "Error", error_message)
 
     def update_translation(self, row, translated_text):
         self.subtitleTable.setItem(row, 3, QTableWidgetItem(translated_text))
