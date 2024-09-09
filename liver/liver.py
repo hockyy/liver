@@ -252,22 +252,32 @@ class TranscriptionApp(ctk.CTk):
         else:
             self.language_label.pack(side="left", padx=5)
             self.language_menu.pack(side="left", padx=5)
+
     def browse_and_add_files(self):
         initial_dir = os.path.expanduser("~")
-        filenames = filedialog.askopenfilenames(filetypes=[("Audio/Video Files", "*.mkv *.mp4 *.wav *.mp3 *.srt")], initialdir=initial_dir)
+        filenames = filedialog.askopenfilenames(filetypes=[("Audio/Video Files", "*.mkv *.mp4 *.wav *.mp3 *.aac *.opus")], initialdir=initial_dir)
         for filename in filenames:
             if filename not in self.queue:
                 self.queue.append(filename)
                 self.queue_listbox.insert(tk.END, filename)
                 self.log_callback(f"Added to queue: {filename}\n")
-
+                
     def remove_selected_files(self):
         selected_indices = self.queue_listbox.curselection()
         for index in reversed(selected_indices):
-            file_path = self.queue_listbox.get(index)
-            self.queue.remove(file_path)
-            self.queue_listbox.delete(index)
-            self.log_callback(f"Removed from queue: {file_path}\n")
+            if 0 <= index < len(self.queue):
+                file_path = self.queue_listbox.get(index)
+                del self.queue[index]  # Use del instead of remove to ensure we remove the correct index
+                self.queue_listbox.delete(index)
+                self.log_callback(f"Removed from queue: {file_path}\n")
+            else:
+                self.log_callback(f"Invalid index {index}, skipping removal.\n")
+        
+        # Ensure queue and listbox are in sync
+        if len(self.queue) != self.queue_listbox.size():
+            self.log_callback("Warning: Queue and listbox are out of sync. Resetting both.\n")
+            self.queue.clear()
+            self.queue_listbox.delete(0, tk.END)
 
     def start_processing(self):
         if self.is_processing:
@@ -285,8 +295,7 @@ class TranscriptionApp(ctk.CTk):
             self.log_callback("All transcriptions completed.\n")
             return
 
-        file_path = self.queue.pop(0)
-        self.queue_list.delete(0)
+        file_path = self.queue[0]  # Get the first file, but don't remove it yet
         self.filename_var.set(file_path)
         self.log_callback(f"Processing: {file_path}\n")
         
@@ -299,10 +308,14 @@ class TranscriptionApp(ctk.CTk):
         if self.transcriber.thread and self.transcriber.thread.is_alive():
             self.after(100, self.check_transcription_status)
         else:
-            self.log_callback(f"Finished processing: {self.queue[0]}\n")
-            self.queue.pop(0)  # Remove the processed file
-            self.queue_listbox.delete(0)  # Remove the first item from the listbox
-            self.process_next_in_queue()
+            if self.queue:  # Check if there's still an item in the queue
+                processed_file = self.queue.pop(0)  # Remove the processed file
+                self.queue_listbox.delete(0)  # Remove the first item from the listbox
+                self.log_callback(f"Finished processing: {processed_file}\n")
+                self.process_next_in_queue()
+            else:
+                self.log_callback("No more files to process.\n")
+                self.is_processing = False
 
     def stop_processing(self):
         self.transcriber.stop_transcription()
