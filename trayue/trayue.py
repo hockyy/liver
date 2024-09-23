@@ -95,6 +95,7 @@ class TranslatorApp(QWidget):
     def select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select SRT File", "", "SRT Files (*.srt)")
         if file_path:
+            self.current_file_path = file_path
             self.filePathLabel.setText(file_path)
             with open(file_path, 'r', encoding='utf-8') as file:
                 srt_content = file.read()
@@ -155,6 +156,10 @@ class TranslatorApp(QWidget):
             return f"Error: {str(e)}"
 
     def translate_all(self):
+        if not self.current_file_path:
+            QMessageBox.warning(self, "Warning", "Please select an SRT file first.")
+            return
+
         rows = []
         texts = []
         for row in range(self.subtitleTable.rowCount()):
@@ -218,16 +223,25 @@ class TranslatorApp(QWidget):
         self.translateAllBtn.setEnabled(True)
         self.blockTranslateBtn.setEnabled(True)
         self.stopBtn.setEnabled(False)
-        QMessageBox.information(self, "Information", "Translation process finished.")
+        
+        # Automatically save the translated file
+        self.save_translated_srt(auto_save=True)
+        
+        QMessageBox.information(self, "Information", "Translation process finished and file saved.")
 
-    def show_error_message(self, error_message):
-        QMessageBox.critical(self, "Error", error_message)
-
-    def update_translation(self, row, translated_text):
-        self.subtitleTable.setItem(row, 3, QTableWidgetItem(translated_text))
-
-    def save_translated_srt(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Translated SRT", "", "SRT Files (*.srt)")
+    def save_translated_srt(self, auto_save=False):
+        if auto_save:
+            if self.current_file_path:
+                directory, filename = os.path.split(self.current_file_path)
+                name, _ = os.path.splitext(filename)
+                new_filename = f"{name}.en.srt"
+                file_path = os.path.join(directory, new_filename)
+            else:
+                QMessageBox.warning(self, "Warning", "No file was selected. Cannot auto-save.")
+                return
+        else:
+            file_path, _ = QFileDialog.getSaveFileName(self, "Save Translated SRT", "", "SRT Files (*.srt)")
+        
         if file_path:
             with open(file_path, 'w', encoding='utf-8') as file:
                 for row in range(self.subtitleTable.rowCount()):
@@ -238,6 +252,15 @@ class TranslatorApp(QWidget):
                     if not translated_text:
                         translated_text = self.subtitleTable.item(row, 2).text()  # Use original if not translated
                     file.write(f"{index}\n{time_from} --> {time_until}\n{translated_text}\n\n")
+            
+            if not auto_save:
+                QMessageBox.information(self, "Information", f"File saved successfully as {file_path}")
+
+    def show_error_message(self, error_message):
+        QMessageBox.critical(self, "Error", error_message)
+
+    def update_translation(self, row, translated_text):
+        self.subtitleTable.setItem(row, 3, QTableWidgetItem(translated_text))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
