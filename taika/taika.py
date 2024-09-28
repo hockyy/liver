@@ -3,6 +3,7 @@ import json
 import random
 import pycantonese
 import requests
+import webbrowser
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QTextEdit, QInputDialog, QShortcut, QHBoxLayout
 from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtCore import Qt
@@ -69,6 +70,7 @@ class FlashcardApp(QWidget):
         QShortcut(QKeySequence(Qt.Key_Right), self, self.next_card)
         QShortcut(QKeySequence(Qt.Key_Left), self, self.copy_current_word)
         QShortcut(QKeySequence(Qt.Key_Up), self, self.flip_card)
+        QShortcut(QKeySequence(Qt.Key_Down), self, self.open_dictionary)
 
     def load_gist(self):
         gists = self.fetch_gists()
@@ -132,6 +134,11 @@ class FlashcardApp(QWidget):
             clipboard.setText(self.current_word)
             print(f"Copied: {self.current_word}")
 
+    def open_dictionary(self):
+        if self.current_word:
+            url = f"https://words.hk/zidin/{self.current_word}"
+            webbrowser.open(url)
+            
 if __name__ == '__main__':
     pycantonese.characters_to_jyutping("一")
     app = QApplication(sys.argv)
