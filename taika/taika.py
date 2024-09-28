@@ -3,7 +3,7 @@ import json
 import random
 import pycantonese
 import requests
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog, QTextEdit, QInputDialog, QShortcut
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QTextEdit, QInputDialog, QShortcut, QHBoxLayout
 from PyQt5.QtGui import QFont, QKeySequence
 from PyQt5.QtCore import Qt
 
@@ -18,7 +18,7 @@ class FlashcardApp(QWidget):
 
     def initUI(self):
         self.setWindowTitle('Chinese Flashcard App')
-        self.setGeometry(300, 300, 500, 600)  # Increased window size
+        self.setGeometry(300, 300, 500, 600)
 
         layout = QVBoxLayout()
 
@@ -30,32 +30,35 @@ class FlashcardApp(QWidget):
                 border-radius: 15px;
             }
         """)
-        self.card_widget.setFixedSize(450, 300)  # Increased card size
+        self.card_widget.setFixedSize(450, 300)
         card_layout = QVBoxLayout(self.card_widget)
 
         self.word_label = QLabel('Click to load words', self)
         self.word_label.setAlignment(Qt.AlignCenter)
-        self.word_label.setFont(QFont('Arial', 36))  # Increased font size
+        self.word_label.setFont(QFont('Arial', 36))
         self.word_label.setWordWrap(True)
         card_layout.addWidget(self.word_label)
 
         layout.addWidget(self.card_widget, alignment=Qt.AlignCenter)
 
+        button_layout = QHBoxLayout()
         self.next_button = QPushButton('Next (Space / Right Arrow)', self)
         self.next_button.clicked.connect(self.next_card)
-        layout.addWidget(self.next_button)
+        button_layout.addWidget(self.next_button)
 
-        self.load_file_button = QPushButton('Load JSON from File', self)
-        self.load_file_button.clicked.connect(self.load_json_file)
-        layout.addWidget(self.load_file_button)
+        self.flip_button = QPushButton('Flip (Up Arrow)', self)
+        self.flip_button.clicked.connect(self.flip_card)
+        button_layout.addWidget(self.flip_button)
 
-        self.load_url_button = QPushButton('Load JSON from URL', self)
-        self.load_url_button.clicked.connect(self.load_json_url)
-        layout.addWidget(self.load_url_button)
+        layout.addLayout(button_layout)
+
+        self.load_gist_button = QPushButton('Load Gist', self)
+        self.load_gist_button.clicked.connect(self.load_gist)
+        layout.addWidget(self.load_gist_button)
 
         self.word_list_text = QTextEdit(self)
         self.word_list_text.setReadOnly(True)
-        self.word_list_text.hide()  # Hide the word list text
+        layout.addWidget(self.word_list_text)
 
         self.setLayout(layout)
 
@@ -67,29 +70,34 @@ class FlashcardApp(QWidget):
         QShortcut(QKeySequence(Qt.Key_Left), self, self.copy_current_word)
         QShortcut(QKeySequence(Qt.Key_Up), self, self.flip_card)
 
-    def load_json_file(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open JSON File", "", "JSON Files (*.json)")
-        if file_name:
-            self.load_json(file_name)
+    def load_gist(self):
+        gists = self.fetch_gists()
+        if gists:
+            gist, ok = QInputDialog.getItem(self, "Select a Gist", "Choose a gist:", gists, 0, False)
+            if ok and gist:
+                gist_id = gist.split(' - ')[0]
+                self.load_gist_content(gist_id)
 
-    def load_json_url(self):
-        url, ok = QInputDialog.getText(self, 'Load JSON from URL', 'Enter URL:')
-        if ok and url:
-            try:
-                response = requests.get(url)
-                response.raise_for_status()
-                self.word_data = response.json()
-                self.process_loaded_data()
-            except Exception as e:
-                print(f"Error loading JSON from URL: {e}")
-
-    def load_json(self, source):
+    def fetch_gists(self):
         try:
-            with open(source, 'r', encoding='utf-8') as file:
-                self.word_data = json.load(file)
+            response = requests.get('https://api.github.com/users/hockyy/gists')
+            response.raise_for_status()
+            gists = response.json()
+            return [f"{gist['id']} - {list(gist['files'].keys())[0]}" for gist in gists]
+        except Exception as e:
+            print(f"Error fetching gists: {e}")
+            return []
+
+    def load_gist_content(self, gist_id):
+        try:
+            response = requests.get(f'https://api.github.com/gists/{gist_id}')
+            response.raise_for_status()
+            gist_data = response.json()
+            file_content = list(gist_data['files'].values())[0]['content']
+            self.word_data = json.loads(file_content)
             self.process_loaded_data()
         except Exception as e:
-            print(f"Error loading JSON: {e}")
+            print(f"Error loading gist content: {e}")
 
     def process_loaded_data(self):
         self.word_list = list(self.word_data.keys())
@@ -102,7 +110,7 @@ class FlashcardApp(QWidget):
             self.word_label.setText(self.current_word)
             self.card_face = "front"
 
-    def flip_card(self, event = None):
+    def flip_card(self, event=None):
         if self.current_word:
             if self.card_face == "front":
                 jyutping = pycantonese.characters_to_jyutping(self.current_word)
