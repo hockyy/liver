@@ -83,14 +83,15 @@ class SubtitleTranscriber:
             '--output_format', 'srt',
             '--task', 'transcribe',
             '--beam_size', str(beam_size),
+            '--best_of', "10",
             '--verbose', 'true',
             '--vad_filter', 'true',
             '--vad_alt_method', 'silero_v4',
             '--standard_asia',
         ]
 
-        # Add language parameter only if the model is not cantonese-scrya
-        if self.model != "cantonese-scrya":
+        # Add language parameter only if the model is not cantonese
+        if self.model != "cantonese":
             command.extend(['--language', lang])
 
         log_callback(f"Starting transcription for {audio_file}\n")
@@ -181,7 +182,7 @@ class TranscriptionApp(ctk.CTk):
         model_frame = ctk.CTkFrame(self)
         model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkLabel(model_frame, text="Model:").pack(side="left", padx=5)
-        models = ['large-v3', 'cantonese-scrya']
+        models = ['large-v3', 'large-v3-turbo', 'cantonese']
         model_menu = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, command=self.update_language_menu)
         model_menu.pack(side="left", padx=5)
 
@@ -197,7 +198,7 @@ class TranscriptionApp(ctk.CTk):
         self.language_menu.pack(side="left", padx=5)
 
         # Beam size
-        self.beam_size_var = tk.StringVar(value='3')
+        self.beam_size_var = tk.StringVar(value='10')
         beam_frame = ctk.CTkFrame(self)
         beam_frame.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkLabel(beam_frame, text="Beam Size:").pack(side="left", padx=5)
@@ -246,7 +247,7 @@ class TranscriptionApp(ctk.CTk):
         self.log_text.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
 
     def update_language_menu(self, *args):
-        if self.model_var.get() == 'cantonese-scrya':
+        if self.model_var.get() == 'cantonese':
             self.language_label.pack_forget()
             self.language_menu.pack_forget()
         else:
@@ -300,7 +301,7 @@ class TranscriptionApp(ctk.CTk):
         self.log_callback(f"Processing: {file_path}\n")
         
         self.transcriber.model = self.model_var.get()
-        lang = self.language_var.get() if self.model_var.get() != 'cantonese-scrya' else ''
+        lang = self.language_var.get() if self.model_var.get() != 'cantonese' else ''
         self.transcriber.start_transcription(file_path, self.log_callback, lang, self.beam_size_var.get())
         self.after(100, self.check_transcription_status)
 
