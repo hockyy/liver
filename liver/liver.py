@@ -65,7 +65,7 @@ class SubtitleTranscriber:
         self.stop_flag = threading.Event()
         self.thread = None
 
-    def transcribe_and_write_srt_live(self, audio_file, log_callback, lang, beam_size):
+    def transcribe_and_write_srt_live(self, audio_file, log_callback, lang, beam_size, best_of):
         output_dir = os.path.dirname(audio_file)
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         cjk_srt_file = os.path.join(output_dir, f"{base_name}.srt")
@@ -83,7 +83,7 @@ class SubtitleTranscriber:
             '--output_format', 'srt',
             '--task', 'transcribe',
             '--beam_size', str(beam_size),
-            '--best_of', "10",
+            '--best_of', str(best_of),
             '--verbose', 'true',
             '--vad_filter', 'true',
             '--vad_alt_method', 'silero_v4',
@@ -142,13 +142,13 @@ class SubtitleTranscriber:
         else:
             log_callback("Transcription failed or was stopped before completion.\n")
 
-    def start_transcription(self, audio_file, log_callback, lang, beam_size):
+    def start_transcription(self, audio_file, log_callback, lang, beam_size, best_of):
         if self.thread and self.thread.is_alive():
             log_callback("Transcription is already running.\n")
             return
 
         self.stop_flag.clear()
-        self.thread = threading.Thread(target=self.transcribe_and_write_srt_live, args=(audio_file, log_callback, lang, beam_size))
+        self.thread = threading.Thread(target=self.transcribe_and_write_srt_live, args=(audio_file, log_callback, lang, beam_size, best_of))
         self.thread.start()
 
     def stop_transcription(self):
@@ -182,7 +182,7 @@ class TranscriptionApp(ctk.CTk):
         model_frame = ctk.CTkFrame(self)
         model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkLabel(model_frame, text="Model:").pack(side="left", padx=5)
-        models = ['large-v3', 'large-v3-turbo', 'cantonese']
+        models = ['large-v3', 'large-v3-turbo', 'cantonese', 'distil-large-v3']
         model_menu = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, command=self.update_language_menu)
         model_menu.pack(side="left", padx=5)
 
@@ -205,9 +205,17 @@ class TranscriptionApp(ctk.CTk):
         beam_entry = ctk.CTkEntry(beam_frame, textvariable=self.beam_size_var)
         beam_entry.pack(side="left", padx=5)
 
+        # Best of
+        self.best_of_var = tk.StringVar(value='5')
+        best_of_frame = ctk.CTkFrame(self)
+        best_of_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        ctk.CTkLabel(best_of_frame, text="Best of:").pack(side="left", padx=5)
+        best_of_entry = ctk.CTkEntry(best_of_frame, textvariable=self.best_of_var)
+        best_of_entry.pack(side="left", padx=5)
+
         # File selection
         file_frame = ctk.CTkFrame(self)
-        file_frame.grid(row=3, column=0, padx=10, pady=10, sticky="ew")
+        file_frame.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkLabel(file_frame, text="Files in Queue:").pack(side="left", padx=5)
         self.queue_listbox = tk.Listbox(file_frame, width=50, height=5)
         self.queue_listbox.pack(side="left", padx=5, expand=True, fill="both")
@@ -220,18 +228,18 @@ class TranscriptionApp(ctk.CTk):
         remove_button.pack(side="left", padx=5)
         # Control buttons
         button_frame = ctk.CTkFrame(self)
-        button_frame.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        button_frame.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
         start_button = ctk.CTkButton(button_frame, text="Start Processing", command=self.start_processing)
         start_button.pack(side="left", padx=5, expand=True, fill="x")
 
         # Progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self, variable=self.progress_var, maximum=100)
-        self.progress_bar.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
+        self.progress_bar.grid(row=6, column=0, padx=10, pady=10, sticky="ew")
 
         # Queue list
         self.queue_frame = ctk.CTkFrame(self)
-        self.queue_frame.grid(row=6, column=0, padx=10, pady=10, sticky="nsew")
+        self.queue_frame.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
         self.queue_frame.grid_columnconfigure(0, weight=1)
         self.queue_frame.grid_rowconfigure(0, weight=1)
 
@@ -244,7 +252,7 @@ class TranscriptionApp(ctk.CTk):
 
         # Log text area
         self.log_text = scrolledtext.ScrolledText(self, wrap='word', width=70, height=15)
-        self.log_text.grid(row=7, column=0, padx=10, pady=10, sticky="nsew")
+        self.log_text.grid(row=8, column=0, padx=10, pady=10, sticky="nsew")
 
     def update_language_menu(self, *args):
         if self.model_var.get() == 'cantonese':
@@ -302,7 +310,7 @@ class TranscriptionApp(ctk.CTk):
         
         self.transcriber.model = self.model_var.get()
         lang = self.language_var.get() if self.model_var.get() != 'cantonese' else ''
-        self.transcriber.start_transcription(file_path, self.log_callback, lang, self.beam_size_var.get())
+        self.transcriber.start_transcription(file_path, self.log_callback, lang, self.beam_size_var.get(), self.best_of_var.get())
         self.after(100, self.check_transcription_status)
 
     def check_transcription_status(self):
