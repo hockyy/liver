@@ -76,7 +76,7 @@ class SubtitleTranscriber:
             return
 
         command = [
-            'Faster-Whisper-XXL.exe', audio_file,
+            'faster-whisper-xxl.exe', audio_file,
             '--model', self.model,
             '--device', self.device,
             '--output_dir', output_dir,
@@ -86,7 +86,7 @@ class SubtitleTranscriber:
             '--best_of', str(best_of),
             '--verbose', 'true',
             '--vad_filter', 'true',
-            '--vad_alt_method', 'silero_v4',
+            '--vad_method', 'pyannote_v3',
             '--standard_asia',
         ]
 
