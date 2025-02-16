@@ -193,7 +193,7 @@ class TranscriptionApp(ctk.CTk):
         self.language_frame.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
         self.language_label = ctk.CTkLabel(self.language_frame, text="Source Language:")
         self.language_label.pack(side="left", padx=5)
-        self.languages = ['en', 'ja', 'zh', 'yue']
+        self.languages = ['en', 'ja', 'zh', 'yue', 'id']
         self.language_menu = ctk.CTkOptionMenu(self.language_frame, variable=self.language_var, values=self.languages)
         self.language_menu.pack(side="left", padx=5)
 
@@ -264,7 +264,7 @@ class TranscriptionApp(ctk.CTk):
 
     def browse_and_add_files(self):
         initial_dir = os.path.expanduser("~")
-        filenames = filedialog.askopenfilenames(filetypes=[("Audio/Video Files", "*.mkv *.mp4 *.wav *.mp3 *.aac *.opus")], initialdir=initial_dir)
+        filenames = filedialog.askopenfilenames(filetypes=[("Audio/Video Files", "*.mkv *.mp4 *.wav *.mp3 *.aac *.opus *.ts")], initialdir=initial_dir)
         for filename in filenames:
             if filename not in self.queue:
                 self.queue.append(filename)
