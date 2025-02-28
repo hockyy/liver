@@ -87,7 +87,7 @@ class SubtitleTranscriber:
             '--verbose', 'true',
             '--vad_filter', 'true',
             '--vad_method', 'pyannote_v3',
-            '--standard_asia',
+            '--standard_asia' if lang in ['ja', 'zh', 'yue'] else '--standard',
         ]
 
         # Add language parameter only if the model is not cantonese
