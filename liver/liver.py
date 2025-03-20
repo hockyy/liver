@@ -182,7 +182,7 @@ class TranscriptionApp(ctk.CTk):
         model_frame = ctk.CTkFrame(self)
         model_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         ctk.CTkLabel(model_frame, text="Model:").pack(side="left", padx=5)
-        models = ['large-v3', 'large-v3-turbo', 'cantonese', 'distil-large-v3']
+        models = ['large-v3', 'large-v3-turbo', 'large-v3-turbo-cantonese-16', 'cantonese', 'distil-large-v3']
         model_menu = ctk.CTkOptionMenu(model_frame, variable=self.model_var, values=models, command=self.update_language_menu)
         model_menu.pack(side="left", padx=5)
 
