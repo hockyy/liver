@@ -462,7 +462,7 @@ def get_color_name(h, s, v):
 # Example usage
 if __name__ == "__main__":
     # Replace with your image path
-    image_path = "kobo.webp"
+    image_path = "vts-2025-09-19_07h36_38.png"
     
     try:
         best_color, all_results = find_best_background_color_optimized(image_path)
