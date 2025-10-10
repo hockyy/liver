@@ -34,7 +34,7 @@ def main():
                 break
             
             # Add to dialogue
-            dialogue.append(f"{current_speaker}: {user_input}")
+            dialogue.append(f"{current_speaker}: {user_input}   ")
             
             # Switch speakers
             current_speaker = SPEAKER_B if current_speaker == SPEAKER_A else SPEAKER_A
