@@ -4,6 +4,8 @@ Interactive Dialogue Creator
 Creates alternating dialogue between two speakers with customizable emojis.
 """
 
+import pyperclip
+
 def main():
     # Customizable speaker emojis/names
     SPEAKER_A = "🐉"  # Change this emoji/symbol for speaker A
@@ -33,8 +35,8 @@ def main():
             if not user_input:
                 break
             
-            # Add to dialogue
-            dialogue.append(f"{current_speaker}: {user_input}   ")
+            # Add to dialogue with guaranteed double space at end
+            dialogue.append(f"{current_speaker}: {user_input}  ")
             
             # Switch speakers
             current_speaker = SPEAKER_B if current_speaker == SPEAKER_A else SPEAKER_A
@@ -48,8 +50,19 @@ def main():
         print("\n" + "="*40)
         print("FINAL DIALOGUE:")
         print("="*40)
+        
+        # Create dialogue text for display and clipboard
+        dialogue_text = "\n".join(dialogue)
+        
         for line in dialogue:
             print(line)
+        
+        # Copy to clipboard
+        try:
+            pyperclip.copy(dialogue_text)
+            print("\n✅ Dialogue copied to clipboard!")
+        except Exception as e:
+            print(f"\n❌ Could not copy to clipboard: {e}")
         
         # Option to save to file
         save_choice = input("\nSave dialogue to file? (y/n): ").strip().lower()
