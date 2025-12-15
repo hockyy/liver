@@ -54,3 +54,5 @@ coverage.xml
 *.csv
 *.dat
 *.out
+
+*.exe
