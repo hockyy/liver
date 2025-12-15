@@ -56,3 +56,6 @@ coverage.xml
 *.out
 
 *.exe
+
+# Application-specific config files
+streaming/streamer_config.json
