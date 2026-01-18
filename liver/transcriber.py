@@ -40,6 +40,14 @@ class SubtitleTranscriber:
                 - realign_device: Device for realignment
                 - roformer_overlap: Overlap for roformer
                 - roformer_vram: VRAM setting for roformer
+                - diarize_method: Diarization method (None, 'pyannote_v3.0', etc.)
+                - diarize_device: Device for diarization
+                - num_speakers: Number of speakers (0 = auto)
+                - min_speakers: Minimum number of speakers
+                - max_speakers: Maximum number of speakers
+                - word_timestamps: Enable word-level timestamps
+                - highlight_words: Enable karaoke-style highlighting
+                - one_word: One word per line setting (0, 1, 2)
         """
         output_dir = os.path.dirname(audio_file)
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
@@ -114,6 +122,22 @@ class SubtitleTranscriber:
             '--standard_asia' if lang in ASIAN_LANGUAGES else '--standard',
         ]
 
+        # Add word timestamps settings (PRO FEATURE)
+        word_timestamps = options.get('word_timestamps', True)
+        command.extend(['--word_timestamps', str(word_timestamps).lower()])
+        
+        if options.get('highlight_words', False):
+            command.extend(['--highlight_words', 'true'])
+        
+        # Add one word per line setting
+        one_word_setting = options.get('one_word', '0 - Disabled')
+        if isinstance(one_word_setting, str):
+            one_word_value = one_word_setting.split(' ')[0]  # Extract just the number
+        else:
+            one_word_value = str(one_word_setting)
+        if one_word_value != '0':
+            command.extend(['--one_word', one_word_value])
+
         # Add voice extraction if specified (PRO FEATURE)
         vocal_extract = options.get('vocal_extract')
         if vocal_extract and vocal_extract != 'none':
@@ -130,6 +154,28 @@ class SubtitleTranscriber:
             realign_device = options.get('realign_device', 'automatic')
             if realign_device != 'automatic':
                 command.extend(['--realign_device', realign_device])
+
+        # Add diarization if enabled (PRO FEATURE - speaker separation)
+        diarize_method = options.get('diarize_method', 'none')
+        if diarize_method and diarize_method != 'none':
+            command.extend(['--diarize', diarize_method])
+            
+            # Add diarize device
+            diarize_device = options.get('diarize_device', 'cuda')
+            command.extend(['--diarize_device', diarize_device])
+            
+            # Add speaker count options
+            num_speakers = options.get('num_speakers', 0)
+            if num_speakers > 0:
+                command.extend(['--num_speakers', str(num_speakers)])
+            else:
+                # Use min/max speakers for auto-detection
+                min_speakers = options.get('min_speakers', 1)
+                max_speakers = options.get('max_speakers', 10)
+                if min_speakers > 1:
+                    command.extend(['--min_speakers', str(min_speakers)])
+                if max_speakers < 10:
+                    command.extend(['--max_speakers', str(max_speakers)])
 
         # Add language parameter only if the model is not cantonese
         if self.model != "cantonese":

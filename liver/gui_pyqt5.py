@@ -12,7 +12,8 @@ from PyQt5.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent, QI
 
 from config import (
     MODELS, LANGUAGES, VAD_METHODS, VOCAL_EXTRACT_METHODS,
-    REALIGN_DEVICES, VALID_MEDIA_EXTENSIONS, DEFAULTS
+    REALIGN_DEVICES, VALID_MEDIA_EXTENSIONS, DEFAULTS,
+    DIARIZE_METHODS, ONE_WORD_OPTIONS
 )
 from transcriber import SubtitleTranscriber
 
@@ -165,6 +166,8 @@ class ModernTranscriptionApp(QMainWindow):
         pro_layout.addLayout(self.create_vad_settings())
         pro_layout.addLayout(self.create_voice_extraction_settings())
         pro_layout.addLayout(self.create_realignment_settings())
+        pro_layout.addLayout(self.create_word_timestamp_settings())
+        pro_layout.addLayout(self.create_diarization_settings())
         pro_layout.addStretch()
         tabs.addTab(pro_tab, "PRO Features")
         
@@ -349,6 +352,127 @@ class ModernTranscriptionApp(QMainWindow):
         layout.addWidget(realign_group)
         
         return layout
+    
+    def create_word_timestamp_settings(self):
+        """Create word-level timestamp settings."""
+        layout = QVBoxLayout()
+        
+        word_group = QGroupBox("Word Timestamps [PRO]")
+        word_layout = QVBoxLayout()
+        
+        # Word timestamps checkbox
+        self.word_timestamps_check = QCheckBox("Enable Word Timestamps")
+        self.word_timestamps_check.setChecked(DEFAULTS['word_timestamps'])
+        self.word_timestamps_check.setToolTip("Extract word-level timestamps for more accurate timing")
+        word_layout.addWidget(self.word_timestamps_check)
+        
+        # Highlight words (karaoke) checkbox
+        self.highlight_words_check = QCheckBox("Highlight Words (Karaoke Style)")
+        self.highlight_words_check.setChecked(DEFAULTS['highlight_words'])
+        self.highlight_words_check.setToolTip("Underline each word as it is spoken in SRT/VTT output")
+        word_layout.addWidget(self.highlight_words_check)
+        
+        # One word per line setting
+        one_word_row = QHBoxLayout()
+        one_word_label = QLabel("One Word Per Line:")
+        one_word_label.setMinimumWidth(150)
+        one_word_label.setToolTip("Output one word per subtitle line")
+        self.one_word_combo = QComboBox()
+        self.one_word_combo.addItems(ONE_WORD_OPTIONS)
+        self.one_word_combo.setCurrentText(DEFAULTS['one_word'])
+        one_word_row.addWidget(one_word_label)
+        one_word_row.addWidget(self.one_word_combo)
+        one_word_row.addStretch()
+        word_layout.addLayout(one_word_row)
+        
+        word_group.setLayout(word_layout)
+        layout.addWidget(word_group)
+        
+        return layout
+    
+    def create_diarization_settings(self):
+        """Create speaker diarization settings."""
+        layout = QVBoxLayout()
+        
+        diarize_group = QGroupBox("Speaker Diarization [PRO]")
+        diarize_layout = QVBoxLayout()
+        
+        # Diarization method selection
+        method_row = QHBoxLayout()
+        method_label = QLabel("Diarization Method:")
+        method_label.setMinimumWidth(150)
+        method_label.setToolTip("Enable speaker separation/identification")
+        self.diarize_combo = QComboBox()
+        self.diarize_combo.addItems(DIARIZE_METHODS)
+        self.diarize_combo.setCurrentText(DEFAULTS['diarize_method'])
+        self.diarize_combo.currentTextChanged.connect(self.on_diarize_changed)
+        method_row.addWidget(method_label)
+        method_row.addWidget(self.diarize_combo)
+        method_row.addStretch()
+        diarize_layout.addLayout(method_row)
+        
+        # Diarization options (hidden by default)
+        self.diarize_options_widget = QWidget()
+        diarize_options_layout = QVBoxLayout(self.diarize_options_widget)
+        diarize_options_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Device selection
+        device_row = QHBoxLayout()
+        device_label = QLabel("Diarization Device:")
+        device_label.setMinimumWidth(150)
+        self.diarize_device_combo = QComboBox()
+        self.diarize_device_combo.addItems(['cuda', 'cpu'])
+        self.diarize_device_combo.setCurrentText(DEFAULTS['diarize_device'])
+        device_row.addWidget(device_label)
+        device_row.addWidget(self.diarize_device_combo)
+        device_row.addStretch()
+        diarize_options_layout.addLayout(device_row)
+        
+        # Number of speakers (0 = auto)
+        speakers_row = QHBoxLayout()
+        num_label = QLabel("Number of Speakers:")
+        num_label.setMinimumWidth(150)
+        num_label.setToolTip("Set to 0 for automatic detection")
+        self.num_speakers_spin = QSpinBox()
+        self.num_speakers_spin.setRange(0, 20)
+        self.num_speakers_spin.setValue(DEFAULTS['num_speakers'])
+        self.num_speakers_spin.setSpecialValueText("Auto-detect")
+        speakers_row.addWidget(num_label)
+        speakers_row.addWidget(self.num_speakers_spin)
+        speakers_row.addStretch()
+        diarize_options_layout.addLayout(speakers_row)
+        
+        # Min/Max speakers row
+        minmax_row = QHBoxLayout()
+        min_label = QLabel("Min Speakers:")
+        min_label.setMinimumWidth(150)
+        self.min_speakers_spin = QSpinBox()
+        self.min_speakers_spin.setRange(1, 20)
+        self.min_speakers_spin.setValue(DEFAULTS['min_speakers'])
+        max_label = QLabel("Max Speakers:")
+        self.max_speakers_spin = QSpinBox()
+        self.max_speakers_spin.setRange(1, 20)
+        self.max_speakers_spin.setValue(DEFAULTS['max_speakers'])
+        minmax_row.addWidget(min_label)
+        minmax_row.addWidget(self.min_speakers_spin)
+        minmax_row.addWidget(max_label)
+        minmax_row.addWidget(self.max_speakers_spin)
+        minmax_row.addStretch()
+        diarize_options_layout.addLayout(minmax_row)
+        
+        # Hide by default since 'none' is default
+        self.diarize_options_widget.hide()
+        diarize_layout.addWidget(self.diarize_options_widget)
+        
+        diarize_group.setLayout(diarize_layout)
+        layout.addWidget(diarize_group)
+        
+        return layout
+    
+    def on_diarize_changed(self, method):
+        """Handle diarization method change."""
+        is_enabled = method != 'none'
+        self.diarize_options_widget.setVisible(is_enabled)
         
     def create_bottom_section(self):
         """Create bottom section with queue and logs."""
@@ -652,6 +776,10 @@ class ModernTranscriptionApp(QMainWindow):
         vocal_extract = self.vocal_combo.currentText()
         if vocal_extract == 'none':
             vocal_extract = None
+        
+        diarize_method = self.diarize_combo.currentText()
+        if diarize_method == 'none':
+            diarize_method = None
             
         return {
             'lang': lang,
@@ -663,6 +791,16 @@ class ModernTranscriptionApp(QMainWindow):
             'realign_device': self.realign_device_combo.currentText(),
             'roformer_overlap': self.roformer_overlap_spin.value(),
             'roformer_vram': self.roformer_vram_spin.value(),
+            # Word timestamp options
+            'word_timestamps': self.word_timestamps_check.isChecked(),
+            'highlight_words': self.highlight_words_check.isChecked(),
+            'one_word': self.one_word_combo.currentText(),
+            # Diarization options
+            'diarize_method': diarize_method,
+            'diarize_device': self.diarize_device_combo.currentText(),
+            'num_speakers': self.num_speakers_spin.value(),
+            'min_speakers': self.min_speakers_spin.value(),
+            'max_speakers': self.max_speakers_spin.value(),
         }
         
     def start_processing(self):

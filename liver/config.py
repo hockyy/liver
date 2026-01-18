@@ -27,6 +27,12 @@ VOCAL_EXTRACT_METHODS = ['none', 'mdx1_kim2', 'mdx2_kim2', 'mb-roformer']
 # Realignment devices (Pro feature)
 REALIGN_DEVICES = ['automatic', 'cuda', 'cpu']
 
+# Diarization methods (Pro feature - speaker separation)
+DIARIZE_METHODS = ['none', 'pyannote_v3.0', 'pyannote_v3.1', 'reverb_v1', 'reverb_v2']
+
+# One word per line options
+ONE_WORD_OPTIONS = ['0 - Disabled', '1 - One word/line', '2 - One word + min 50ms']
+
 # Supported media file extensions
 VALID_MEDIA_EXTENSIONS = {
     '.mkv', '.mp4', '.wav', '.mp3', '.aac', '.opus', '.ts',
@@ -45,5 +51,15 @@ DEFAULTS = {
     'realign_device': 'automatic',
     'roformer_overlap': '0.25',
     'roformer_vram': '4',
+    # Diarization settings
+    'diarize_method': 'none',
+    'diarize_device': 'cuda',
+    'num_speakers': 0,  # 0 = auto-detect
+    'min_speakers': 1,
+    'max_speakers': 10,
+    # Word-level timestamp settings
+    'word_timestamps': True,
+    'highlight_words': False,
+    'one_word': '0 - Disabled',
 }
 
