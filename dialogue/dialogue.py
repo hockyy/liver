@@ -8,8 +8,8 @@ import pyperclip
 
 def main():
     # Customizable speaker emojis/names
-    SPEAKER_A = "🐉"  # Change this emoji/symbol for speaker A
-    SPEAKER_B = "😈"  # Change this emoji/symbol for speaker B
+    SPEAKER_B = "🌈"  # Change this emoji/symbol for speaker A
+    SPEAKER_A = "😈"  # Change this emoji/symbol for speaker B
     
     print("=== Interactive Dialogue Creator ===")
     print("Type your dialogue lines. Press Enter on empty line to finish.")
