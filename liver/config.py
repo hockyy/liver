@@ -33,6 +33,12 @@ DIARIZE_METHODS = ['none', 'pyannote_v3.0', 'pyannote_v3.1', 'reverb_v1', 'rever
 # One word per line options
 ONE_WORD_OPTIONS = ['0 - Disabled', '1 - One word/line', '2 - One word + min 50ms']
 
+# Subtitle length presets for different content types
+SUBTITLE_PRESETS = ['Default', 'Brainrot (Short)', 'YouTube Shorts', 'TikTok', 'Custom']
+
+# Max comma cent options (percentage of line width to break at comma)
+MAX_COMMA_CENT_OPTIONS = ['100 - Disabled', '90', '80', '70', '60', '50', '40', '30', '20']
+
 # Supported media file extensions
 VALID_MEDIA_EXTENSIONS = {
     '.mkv', '.mp4', '.wav', '.mp3', '.aac', '.opus', '.ts',
@@ -61,5 +67,11 @@ DEFAULTS = {
     'word_timestamps': True,
     'highlight_words': False,
     'one_word': '0 - Disabled',
+    # Subtitle format settings (for brainrot/short-form content)
+    'sentence_split': False,   # Enable sentence splitting (--sentence flag)
+    'max_line_width': 1000,    # Max characters per line (1000 = essentially no limit)
+    'max_line_count': 1,       # Max lines per subtitle (1-4)
+    'max_comma_cent': '100 - Disabled',  # Break at comma after this % of line width
+    'subtitle_preset': 'Default',
 }
 

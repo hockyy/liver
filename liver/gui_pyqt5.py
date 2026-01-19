@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QGroupBox, QLabel, QComboBox, QLineEdit, QCheckBox, QPushButton,
     QListWidget, QTextEdit, QProgressBar, QFileDialog, QSpinBox,
-    QDoubleSpinBox, QTabWidget, QFrame, QSplitter
+    QDoubleSpinBox, QTabWidget, QFrame, QSplitter, QScrollArea
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl
 from PyQt5.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent, QIcon
@@ -13,7 +13,7 @@ from PyQt5.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent, QI
 from config import (
     MODELS, LANGUAGES, VAD_METHODS, VOCAL_EXTRACT_METHODS,
     REALIGN_DEVICES, VALID_MEDIA_EXTENSIONS, DEFAULTS,
-    DIARIZE_METHODS, ONE_WORD_OPTIONS
+    DIARIZE_METHODS, ONE_WORD_OPTIONS, SUBTITLE_PRESETS, MAX_COMMA_CENT_OPTIONS
 )
 from transcriber import SubtitleTranscriber
 
@@ -152,24 +152,39 @@ class ModernTranscriptionApp(QMainWindow):
         # Create tabs for better organization
         tabs = QTabWidget()
         
-        # Basic Settings Tab
+        # Basic Settings Tab (with scroll area)
+        basic_scroll = QScrollArea()
+        basic_scroll.setWidgetResizable(True)
+        basic_scroll.setFrameShape(QFrame.NoFrame)
+        basic_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
         basic_tab = QWidget()
         basic_layout = QVBoxLayout(basic_tab)
         basic_layout.addLayout(self.create_model_settings())
         basic_layout.addLayout(self.create_basic_parameters())
         basic_layout.addStretch()
-        tabs.addTab(basic_tab, "Basic Settings")
         
-        # PRO Features Tab
+        basic_scroll.setWidget(basic_tab)
+        tabs.addTab(basic_scroll, "Basic Settings")
+        
+        # PRO Features Tab (with scroll area for many settings)
+        pro_scroll = QScrollArea()
+        pro_scroll.setWidgetResizable(True)
+        pro_scroll.setFrameShape(QFrame.NoFrame)
+        pro_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
         pro_tab = QWidget()
         pro_layout = QVBoxLayout(pro_tab)
         pro_layout.addLayout(self.create_vad_settings())
         pro_layout.addLayout(self.create_voice_extraction_settings())
         pro_layout.addLayout(self.create_realignment_settings())
         pro_layout.addLayout(self.create_word_timestamp_settings())
+        pro_layout.addLayout(self.create_subtitle_format_settings())
         pro_layout.addLayout(self.create_diarization_settings())
         pro_layout.addStretch()
-        tabs.addTab(pro_tab, "PRO Features")
+        
+        pro_scroll.setWidget(pro_tab)
+        tabs.addTab(pro_scroll, "PRO Features")
         
         settings_layout.addWidget(tabs)
         return settings_widget
@@ -389,6 +404,116 @@ class ModernTranscriptionApp(QMainWindow):
         layout.addWidget(word_group)
         
         return layout
+    
+    def create_subtitle_format_settings(self):
+        """Create subtitle format settings for brainrot/short-form content."""
+        layout = QVBoxLayout()
+        
+        format_group = QGroupBox("Subtitle Format [Brainrot/Shorts]")
+        format_layout = QVBoxLayout()
+        
+        # Preset selection
+        preset_row = QHBoxLayout()
+        preset_label = QLabel("Preset:")
+        preset_label.setMinimumWidth(150)
+        preset_label.setToolTip("Quick presets for different content types")
+        self.subtitle_preset_combo = QComboBox()
+        self.subtitle_preset_combo.addItems(SUBTITLE_PRESETS)
+        self.subtitle_preset_combo.setCurrentText(DEFAULTS['subtitle_preset'])
+        self.subtitle_preset_combo.currentTextChanged.connect(self.on_subtitle_preset_changed)
+        preset_row.addWidget(preset_label)
+        preset_row.addWidget(self.subtitle_preset_combo)
+        preset_row.addStretch()
+        format_layout.addLayout(preset_row)
+        
+        # Sentence split checkbox
+        self.sentence_split_check = QCheckBox("Enable Sentence Splitting")
+        self.sentence_split_check.setChecked(DEFAULTS['sentence_split'])
+        self.sentence_split_check.setToolTip("Split subtitles at sentence boundaries (required for line width/count to work properly)")
+        self.sentence_split_check.stateChanged.connect(self.on_subtitle_format_changed)
+        format_layout.addWidget(self.sentence_split_check)
+        
+        # Max line width (characters)
+        width_row = QHBoxLayout()
+        width_label = QLabel("Max Chars/Line:")
+        width_label.setMinimumWidth(150)
+        width_label.setToolTip("Maximum characters per subtitle line")
+        self.max_line_width_spin = QSpinBox()
+        self.max_line_width_spin.setRange(10, 1000)
+        self.max_line_width_spin.setValue(DEFAULTS['max_line_width'])
+        self.max_line_width_spin.valueChanged.connect(self.on_subtitle_format_changed)
+        width_row.addWidget(width_label)
+        width_row.addWidget(self.max_line_width_spin)
+        width_row.addStretch()
+        format_layout.addLayout(width_row)
+        
+        # Max line count
+        count_row = QHBoxLayout()
+        count_label = QLabel("Max Lines:")
+        count_label.setMinimumWidth(150)
+        count_label.setToolTip("Maximum number of lines per subtitle entry")
+        self.max_line_count_spin = QSpinBox()
+        self.max_line_count_spin.setRange(1, 4)
+        self.max_line_count_spin.setValue(DEFAULTS['max_line_count'])
+        self.max_line_count_spin.valueChanged.connect(self.on_subtitle_format_changed)
+        count_row.addWidget(count_label)
+        count_row.addWidget(self.max_line_count_spin)
+        count_row.addStretch()
+        format_layout.addLayout(count_row)
+        
+        # Max comma cent (break at comma)
+        comma_row = QHBoxLayout()
+        comma_label = QLabel("Break at Comma:")
+        comma_label.setMinimumWidth(150)
+        comma_label.setToolTip("Break line at comma after this percentage of max line width (requires sentence splitting)")
+        self.max_comma_cent_combo = QComboBox()
+        self.max_comma_cent_combo.addItems(MAX_COMMA_CENT_OPTIONS)
+        self.max_comma_cent_combo.setCurrentText(DEFAULTS['max_comma_cent'])
+        self.max_comma_cent_combo.currentTextChanged.connect(self.on_subtitle_format_changed)
+        comma_row.addWidget(comma_label)
+        comma_row.addWidget(self.max_comma_cent_combo)
+        comma_row.addStretch()
+        format_layout.addLayout(comma_row)
+        
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
+        
+        return layout
+    
+    def on_subtitle_preset_changed(self, preset):
+        """Apply subtitle format preset."""
+        # Presets: sentence_split, width, count, comma_cent
+        presets = {
+            'Default': {'sentence': False, 'width': 1000, 'count': 1, 'comma': '100 - Disabled'},
+            'Brainrot (Short)': {'sentence': True, 'width': 20, 'count': 1, 'comma': '50'},
+            'YouTube Shorts': {'sentence': True, 'width': 30, 'count': 2, 'comma': '70'},
+            'TikTok': {'sentence': True, 'width': 25, 'count': 1, 'comma': '60'},
+            'Custom': None  # Don't change values
+        }
+        
+        if preset in presets and presets[preset] is not None:
+            values = presets[preset]
+            # Block signals to prevent recursive calls
+            self.sentence_split_check.blockSignals(True)
+            self.max_line_width_spin.blockSignals(True)
+            self.max_line_count_spin.blockSignals(True)
+            self.max_comma_cent_combo.blockSignals(True)
+            
+            self.sentence_split_check.setChecked(values['sentence'])
+            self.max_line_width_spin.setValue(values['width'])
+            self.max_line_count_spin.setValue(values['count'])
+            self.max_comma_cent_combo.setCurrentText(values['comma'])
+            
+            self.sentence_split_check.blockSignals(False)
+            self.max_line_width_spin.blockSignals(False)
+            self.max_line_count_spin.blockSignals(False)
+            self.max_comma_cent_combo.blockSignals(False)
+    
+    def on_subtitle_format_changed(self):
+        """Handle manual change to subtitle format - switch to Custom preset."""
+        self.subtitle_preset_combo.blockSignals(True)
+        self.subtitle_preset_combo.setCurrentText('Custom')
+        self.subtitle_preset_combo.blockSignals(False)
     
     def create_diarization_settings(self):
         """Create speaker diarization settings."""
@@ -695,6 +820,35 @@ class ModernTranscriptionApp(QMainWindow):
             QSplitter::handle:hover {
                 background-color: #0d7377;
             }
+            QScrollArea {
+                background-color: transparent;
+                border: none;
+            }
+            QScrollArea > QWidget > QWidget {
+                background-color: transparent;
+            }
+            QScrollBar:vertical {
+                background-color: #2d2d2d;
+                width: 12px;
+                border-radius: 6px;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4a4a4a;
+                border-radius: 5px;
+                min-height: 30px;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #0d7377;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0;
+                background: none;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
         """)
         
     def on_model_changed(self, model):
@@ -795,6 +949,11 @@ class ModernTranscriptionApp(QMainWindow):
             'word_timestamps': self.word_timestamps_check.isChecked(),
             'highlight_words': self.highlight_words_check.isChecked(),
             'one_word': self.one_word_combo.currentText(),
+            # Subtitle format options (brainrot/shorts)
+            'sentence_split': self.sentence_split_check.isChecked(),
+            'max_line_width': self.max_line_width_spin.value(),
+            'max_line_count': self.max_line_count_spin.value(),
+            'max_comma_cent': self.max_comma_cent_combo.currentText(),
             # Diarization options
             'diarize_method': diarize_method,
             'diarize_device': self.diarize_device_combo.currentText(),

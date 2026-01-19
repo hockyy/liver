@@ -48,6 +48,10 @@ class SubtitleTranscriber:
                 - word_timestamps: Enable word-level timestamps
                 - highlight_words: Enable karaoke-style highlighting
                 - one_word: One word per line setting (0, 1, 2)
+                - sentence_split: Enable sentence splitting for line breaking
+                - max_line_width: Max characters per subtitle line
+                - max_line_count: Max lines per subtitle entry (1-4)
+                - max_comma_cent: Break at comma after this % of line width
         """
         output_dir = os.path.dirname(audio_file)
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
@@ -137,6 +141,24 @@ class SubtitleTranscriber:
             one_word_value = str(one_word_setting)
         if one_word_value != '0':
             command.extend(['--one_word', one_word_value])
+        
+        # Add subtitle format settings (for brainrot/short-form content)
+        sentence_split = options.get('sentence_split', False)
+        if sentence_split:
+            command.append('--sentence')
+        
+        max_line_width = options.get('max_line_width', 1000)
+        command.extend(['--max_line_width', str(max_line_width)])
+        
+        max_line_count = options.get('max_line_count', 1)
+        command.extend(['--max_line_count', str(max_line_count)])
+        
+        # Add max_comma_cent if sentence splitting is enabled
+        max_comma_cent = options.get('max_comma_cent', '100 - Disabled')
+        if sentence_split and max_comma_cent != '100 - Disabled':
+            # Extract just the number from options like "70" or "100 - Disabled"
+            comma_value = max_comma_cent.split(' ')[0]
+            command.extend(['--max_comma_cent', comma_value])
 
         # Add voice extraction if specified (PRO FEATURE)
         vocal_extract = options.get('vocal_extract')
