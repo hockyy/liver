@@ -1,0 +1,9 @@
+PyQt5>=5.15.0
+
+# System requirement: FFmpeg must be installed
+# 
+# Install FFmpeg:
+#   Windows: winget install FFmpeg
+#            or: choco install ffmpeg
+#   macOS:   brew install ffmpeg
+#   Linux:   sudo apt install ffmpeg
