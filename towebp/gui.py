@@ -16,12 +16,14 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QDoubleSpinBox,
     QFileDialog,
     QProgressBar,
     QGroupBox,
     QCheckBox,
     QLineEdit,
     QMessageBox,
+    QComboBox,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
@@ -32,7 +34,7 @@ class ConvertThread(QThread):
     finished = pyqtSignal(str, float, float)  # output_path, input_size, output_size
     error = pyqtSignal(str)
     
-    def __init__(self, input_path, output_path, quality, fps, width, loop):
+    def __init__(self, input_path, output_path, quality, fps, width, loop, speed, output_format):
         super().__init__()
         self.input_path = input_path
         self.output_path = output_path
@@ -40,30 +42,52 @@ class ConvertThread(QThread):
         self.fps = fps
         self.width = width
         self.loop = loop
+        self.speed = speed
+        self.output_format = output_format
     
     def run(self):
         try:
             # Build filter chain
             filters = []
+            if self.speed != 1.0:
+                # setpts=PTS/speed: speed > 1 = faster, speed < 1 = slower
+                filters.append(f"setpts=PTS/{self.speed}")
             if self.width > 0:
                 filters.append(f"scale={self.width}:-1:flags=lanczos")
             filters.append(f"fps={self.fps}")
             filter_str = ",".join(filters)
             
-            # Build ffmpeg command
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", self.input_path,
-                "-vf", filter_str,
-                "-vcodec", "libwebp",
-                "-lossless", "0",
-                "-compression_level", "6",
-                "-q:v", str(self.quality),
-                "-loop", str(self.loop),
-                "-preset", "picture",
-                "-an",
-                self.output_path
-            ]
+            # Build ffmpeg command based on format
+            if self.output_format == "webp":
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", self.input_path,
+                    "-vf", filter_str,
+                    "-vcodec", "libwebp",
+                    "-lossless", "0",
+                    "-compression_level", "6",
+                    "-q:v", str(self.quality),
+                    "-loop", str(self.loop),
+                    "-preset", "picture",
+                    "-an",
+                    self.output_path
+                ]
+            else:  # avif
+                # Convert quality (0-100) to CRF (63-0) - lower CRF = better quality
+                crf = int(63 - (self.quality / 100 * 63))
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", self.input_path,
+                    "-vf", filter_str,
+                    "-c:v", "libaom-av1",
+                    "-crf", str(crf),
+                    "-b:v", "0",
+                    "-cpu-used", "6",
+                    "-row-mt", "1",
+                    "-tiles", "2x2",
+                    "-an",
+                    self.output_path
+                ]
             
             result = subprocess.run(cmd, capture_output=True, text=True)
             
@@ -150,7 +174,7 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         self.setWindowTitle("MOV to WebP Converter")
-        self.setMinimumSize(500, 550)
+        self.setMinimumSize(500, 650)
         
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -172,6 +196,17 @@ class MainWindow(QMainWindow):
         settings_group = QGroupBox("Conversion Settings")
         settings_layout = QVBoxLayout(settings_group)
         
+        # Output format
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("Format:"))
+        self.format_combo = QComboBox()
+        self.format_combo.addItem("WebP", "webp")
+        self.format_combo.addItem("AVIF", "avif")
+        self.format_combo.currentIndexChanged.connect(self.on_format_changed)
+        format_layout.addWidget(self.format_combo)
+        format_layout.addStretch()
+        settings_layout.addLayout(format_layout)
+        
         # Quality slider
         quality_layout = QHBoxLayout()
         quality_layout.addWidget(QLabel("Quality:"))
@@ -180,7 +215,7 @@ class MainWindow(QMainWindow):
         self.quality_slider.setValue(25)
         self.quality_slider.valueChanged.connect(self.update_quality_label)
         quality_layout.addWidget(self.quality_slider)
-        self.quality_label = QLabel("50")
+        self.quality_label = QLabel("25")
         self.quality_label.setMinimumWidth(30)
         quality_layout.addWidget(self.quality_label)
         settings_layout.addLayout(quality_layout)
@@ -219,6 +254,19 @@ class MainWindow(QMainWindow):
         loop_layout.addWidget(self.loop_spin)
         loop_layout.addStretch()
         settings_layout.addLayout(loop_layout)
+        
+        # Speed
+        speed_layout = QHBoxLayout()
+        speed_layout.addWidget(QLabel("Speed:"))
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.25, 4.0)
+        self.speed_spin.setValue(1.0)
+        self.speed_spin.setSingleStep(0.25)
+        self.speed_spin.setSuffix("x")
+        self.speed_spin.setDecimals(2)
+        speed_layout.addWidget(self.speed_spin)
+        speed_layout.addStretch()
+        settings_layout.addLayout(speed_layout)
         
         layout.addWidget(settings_group)
         
@@ -271,6 +319,14 @@ class MainWindow(QMainWindow):
     def update_quality_label(self, value):
         self.quality_label.setText(str(value))
     
+    def on_format_changed(self):
+        # Update output file extension when format changes
+        if self.output_edit.text():
+            current_path = Path(self.output_edit.text())
+            new_ext = "." + self.format_combo.currentData()
+            new_path = current_path.with_suffix(new_ext)
+            self.output_edit.setText(str(new_path))
+    
     def browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
@@ -287,31 +343,40 @@ class MainWindow(QMainWindow):
         self.drop_area.setText(f"Selected:\n{filename}")
         self.convert_btn.setEnabled(True)
         
-        # Auto-set output path
-        output_path = str(Path(file_path).with_suffix(".webp"))
+        # Auto-set output path based on selected format
+        ext = "." + self.format_combo.currentData()
+        output_path = str(Path(file_path).with_suffix(ext))
         self.output_edit.setText(output_path)
         
         self.status_label.setText("")
     
     def browse_output(self):
+        output_format = self.format_combo.currentData()
+        if output_format == "webp":
+            filter_str = "WebP files (*.webp)"
+        else:
+            filter_str = "AVIF files (*.avif)"
+        
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save WebP file",
+            "Save output file",
             self.output_edit.text() or "",
-            "WebP files (*.webp)"
+            filter_str
         )
         if file_path:
-            if not file_path.endswith(".webp"):
-                file_path += ".webp"
+            ext = "." + output_format
+            if not file_path.endswith(ext):
+                file_path += ext
             self.output_edit.setText(file_path)
     
     def start_conversion(self):
         if not self.input_path:
             return
         
+        output_format = self.format_combo.currentData()
         output_path = self.output_edit.text()
         if not output_path:
-            output_path = str(Path(self.input_path).with_suffix(".webp"))
+            output_path = str(Path(self.input_path).with_suffix("." + output_format))
         
         width = self.width_spin.value() if self.width_check.isChecked() else 0
         
@@ -326,7 +391,9 @@ class MainWindow(QMainWindow):
             self.quality_slider.value(),
             self.fps_spin.value(),
             width,
-            self.loop_spin.value()
+            self.loop_spin.value(),
+            self.speed_spin.value(),
+            output_format
         )
         self.convert_thread.finished.connect(self.conversion_finished)
         self.convert_thread.error.connect(self.conversion_error)

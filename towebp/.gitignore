@@ -27,6 +27,7 @@ env/
 
 # Output files
 *.webp
+*.avif
 *.gif
 
 # OS files
