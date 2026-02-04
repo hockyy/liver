@@ -115,16 +115,24 @@ class SubtitleTranscriber:
             'faster-whisper-xxl.exe', audio_file,
             '--model', self.model,
             '--device', self.device,
+            '--compute_type', 'float32',  # Full precision for maximum accuracy
             '--output_dir', output_dir,
             '--output_format', 'srt',
             '--task', 'transcribe',
             '--beam_size', str(options.get('beam_size', 10)),
             '--best_of', str(options.get('best_of', 5)),
             '--verbose', 'true',
-            '--vad_filter', 'true',
-            '--vad_method', options.get('vad_method', 'ten'),
-            '--standard_asia' if lang in ASIAN_LANGUAGES else '--standard',
         ]
+        
+        # Add VAD settings (can be disabled with 'none')
+        vad_method = options.get('vad_method', 'ten')
+        if vad_method == 'none':
+            command.extend(['--vad_filter', 'false'])
+        else:
+            command.extend(['--vad_filter', 'true', '--vad_method', vad_method])
+        
+        # Add standard formatting based on language
+        command.append('--standard_asia' if lang in ASIAN_LANGUAGES else '--standard')
 
         # Add word timestamps settings (PRO FEATURE)
         word_timestamps = options.get('word_timestamps', True)

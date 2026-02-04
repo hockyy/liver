@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SRT Clip Preprocessor</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SRT Clip Preprocessor</h1>
+            <p class="subtitle">AI-powered video clip finder</p>
+        </header>
+
+        <!-- Upload Section -->
+        <section class="card" id="upload-section">
+            <h2>1. Upload SRT File</h2>
+            <div class="upload-area" id="upload-area">
+                <input type="file" id="srt-file" accept=".srt" hidden>
+                <div class="upload-content">
+                    <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p>Click or drag SRT file here</p>
+                </div>
+            </div>
+            <div class="file-info hidden" id="file-info">
+                <div class="file-details">
+                    <span class="file-name" id="file-name"></span>
+                    <button class="btn-small btn-secondary" id="clear-file">Clear</button>
+                </div>
+                <div class="file-stats">
+                    <span><strong>Entries:</strong> <span id="entry-count">-</span></span>
+                    <span><strong>Duration:</strong> <span id="duration">-</span></span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Configuration Section -->
+        <section class="card" id="config-section">
+            <h2>2. Configure Analysis</h2>
+            
+            <div class="form-group">
+                <label for="provider">AI Provider</label>
+                <select id="provider">
+                    <option value="openrouter" selected>OpenRouter (default)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="ollama">Ollama (local)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="model">Model</label>
+                <input type="text" id="model" placeholder="{{ default_model }}" value="">
+                <small>Leave empty to use default from .env</small>
+            </div>
+
+            <div class="form-group">
+                <label for="context">Video Context (optional)</label>
+                <textarea id="context" rows="2" placeholder="e.g., Gaming stream playing Elden Ring, tech review, cooking tutorial..."></textarea>
+                <small>Helps AI understand what to look for</small>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="max-tokens">Max Tokens per Chunk</label>
+                    <input type="number" id="max-tokens" value="6000" min="1000" max="30000">
+                </div>
+                <div class="form-group">
+                    <label for="min-confidence">Min Confidence</label>
+                    <input type="number" id="min-confidence" value="0.5" min="0" max="1" step="0.1">
+                </div>
+            </div>
+
+            {% if not has_api_key %}
+            <div class="warning">
+                <strong>Warning:</strong> No OPENROUTER_API_KEY found in .env file. 
+                Please add your API key to the .env file.
+            </div>
+            {% endif %}
+        </section>
+
+        <!-- Dry Run Section -->
+        <section class="card" id="dryrun-section">
+            <h2>3. Preview & Run</h2>
+            
+            <div class="button-group">
+                <button class="btn btn-secondary" id="dry-run-btn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 6v6l4 2"/>
+                    </svg>
+                    Dry Run
+                </button>
+                <button class="btn btn-primary" id="analyze-btn" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                    Analyze
+                </button>
+            </div>
+
+            <!-- Dry Run Results -->
+            <div class="dry-run-results hidden" id="dry-run-results">
+                <h3>Analysis Plan</h3>
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-value" id="stat-provider">-</span>
+                        <span class="stat-label">Provider</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="stat-model">-</span>
+                        <span class="stat-label">Model</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="stat-chunks">-</span>
+                        <span class="stat-label">Chunks</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="stat-queries">-</span>
+                        <span class="stat-label">API Queries</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="stat-tokens">-</span>
+                        <span class="stat-label">Est. Tokens</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-value" id="stat-compression">-</span>
+                        <span class="stat-label">Compression</span>
+                    </div>
+                </div>
+                <div class="chunk-list" id="chunk-list"></div>
+            </div>
+
+            <!-- Streaming Output -->
+            <div class="stream-output hidden" id="stream-output">
+                <h3>AI Analysis <span class="stream-status" id="stream-status"></span></h3>
+                <div class="stream-progress" id="stream-progress">
+                    <span id="current-chunk-label">Chunk 0/0</span>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+                <div class="stream-content" id="stream-content">
+                    <pre id="ai-output"></pre>
+                </div>
+                <div class="chunk-clips hidden" id="chunk-clips">
+                    <h4>Clips found in this chunk:</h4>
+                    <div id="chunk-clips-list"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="card hidden" id="results-section">
+            <h2>4. Results</h2>
+            
+            <div class="results-header">
+                <span id="results-count">0 clips found</span>
+                <button class="btn-small btn-secondary" id="copy-timestamps">Copy Timestamps</button>
+            </div>
+
+            <div class="clips-list" id="clips-list"></div>
+
+            <!-- Timestamps Output -->
+            <div class="timestamps-output">
+                <h3>Timestamps for Clipper</h3>
+                <textarea id="timestamps-text" rows="6" readonly></textarea>
+            </div>
+        </section>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay hidden" id="loading">
+            <div class="spinner"></div>
+            <p id="loading-text">Processing...</p>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let currentFilepath = null;
+
+        // Elements
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('srt-file');
+        const fileInfo = document.getElementById('file-info');
+        const fileName = document.getElementById('file-name');
+        const entryCount = document.getElementById('entry-count');
+        const duration = document.getElementById('duration');
+        const clearFileBtn = document.getElementById('clear-file');
+        const dryRunBtn = document.getElementById('dry-run-btn');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const dryRunResults = document.getElementById('dry-run-results');
+        const resultsSection = document.getElementById('results-section');
+        const clipsList = document.getElementById('clips-list');
+        const timestampsText = document.getElementById('timestamps-text');
+        const loading = document.getElementById('loading');
+        const loadingText = document.getElementById('loading-text');
+
+        // Upload handling
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) handleFile(file);
+        });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files[0]) handleFile(fileInput.files[0]);
+        });
+
+        clearFileBtn.addEventListener('click', () => {
+            currentFilepath = null;
+            fileInput.value = '';
+            fileInfo.classList.add('hidden');
+            uploadArea.classList.remove('hidden');
+            dryRunBtn.disabled = true;
+            analyzeBtn.disabled = true;
+            dryRunResults.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+        });
+
+        async function handleFile(file) {
+            if (!file.name.toLowerCase().endsWith('.srt')) {
+                alert('Please upload an SRT file');
+                return;
+            }
+
+            showLoading('Uploading...');
+            
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Upload failed');
+                }
+
+                currentFilepath = data.filepath;
+                fileName.textContent = data.filename;
+                entryCount.textContent = data.entries_count.toLocaleString();
+                duration.textContent = data.duration;
+
+                uploadArea.classList.add('hidden');
+                fileInfo.classList.remove('hidden');
+                dryRunBtn.disabled = false;
+                analyzeBtn.disabled = false;
+                
+                // Auto dry run
+                await performDryRun();
+
+            } catch (error) {
+                alert('Error: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // Dry Run
+        dryRunBtn.addEventListener('click', performDryRun);
+
+        async function performDryRun() {
+            if (!currentFilepath) return;
+
+            showLoading('Calculating...');
+
+            const formData = new FormData();
+            formData.append('filepath', currentFilepath);
+            formData.append('provider', document.getElementById('provider').value);
+            formData.append('model', document.getElementById('model').value);
+            formData.append('max_tokens', document.getElementById('max-tokens').value);
+
+            try {
+                const response = await fetch('/dry-run', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Dry run failed');
+                }
+
+                // Update stats
+                document.getElementById('stat-provider').textContent = data.provider;
+                document.getElementById('stat-model').textContent = data.model;
+                document.getElementById('stat-chunks').textContent = data.total_chunks;
+                document.getElementById('stat-queries').textContent = data.api_queries;
+                document.getElementById('stat-tokens').textContent = data.total_tokens.toLocaleString();
+                document.getElementById('stat-compression').textContent = `${data.compression}x`;
+
+                // Update chunk list
+                const chunkList = document.getElementById('chunk-list');
+                chunkList.innerHTML = data.chunks.map(chunk => `
+                    <div class="chunk-item">
+                        <span class="chunk-index">#${chunk.index}</span>
+                        <span class="chunk-time">${chunk.start} - ${chunk.end}</span>
+                        <span class="chunk-entries">entries ${chunk.entry_range}</span>
+                        <span class="chunk-tokens">~${chunk.tokens.toLocaleString()} tokens</span>
+                    </div>
+                `).join('');
+
+                dryRunResults.classList.remove('hidden');
+
+            } catch (error) {
+                alert('Error: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // Analyze with streaming
+        analyzeBtn.addEventListener('click', performAnalysis);
+
+        async function performAnalysis() {
+            if (!currentFilepath) return;
+
+            const provider = document.getElementById('provider').value;
+            const model = document.getElementById('model').value;
+            const context = document.getElementById('context').value;
+            const maxTokens = document.getElementById('max-tokens').value;
+            const minConfidence = document.getElementById('min-confidence').value;
+
+            // Show streaming UI
+            const streamOutput = document.getElementById('stream-output');
+            const streamStatus = document.getElementById('stream-status');
+            const aiOutput = document.getElementById('ai-output');
+            const progressFill = document.getElementById('progress-fill');
+            const currentChunkLabel = document.getElementById('current-chunk-label');
+            const chunkClips = document.getElementById('chunk-clips');
+            const chunkClipsList = document.getElementById('chunk-clips-list');
+            
+            streamOutput.classList.remove('hidden');
+            streamStatus.textContent = 'Connecting...';
+            streamStatus.className = 'stream-status connecting';
+            aiOutput.textContent = '';
+            chunkClips.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+            
+            // Disable buttons
+            analyzeBtn.disabled = true;
+            dryRunBtn.disabled = true;
+
+            // Build URL with query params
+            const params = new URLSearchParams({
+                filepath: currentFilepath,
+                provider: provider,
+                model: model,
+                context: context,
+                max_tokens: maxTokens,
+                min_confidence: minConfidence,
+            });
+
+            try {
+                const eventSource = new EventSource(`/analyze-stream?${params}`);
+                let currentChunkIndex = 0;
+                let totalChunks = 0;
+
+                eventSource.addEventListener('chunk_start', (e) => {
+                    const data = JSON.parse(e.data);
+                    currentChunkIndex = data.index;
+                    totalChunks = data.total;
+                    
+                    currentChunkLabel.textContent = `Chunk ${data.index}/${data.total} (entries ${data.entry_range}) - ${data.start} to ${data.end}`;
+                    progressFill.style.width = `${((data.index - 1) / data.total) * 100}%`;
+                    streamStatus.textContent = 'Streaming...';
+                    streamStatus.className = 'stream-status streaming';
+                    
+                    // Clear AI output for new chunk
+                    aiOutput.textContent = '';
+                    chunkClips.classList.add('hidden');
+                });
+
+                eventSource.addEventListener('token', (e) => {
+                    const data = JSON.parse(e.data);
+                    aiOutput.textContent += data.token;
+                    
+                    // Auto-scroll to bottom
+                    const streamContent = document.getElementById('stream-content');
+                    streamContent.scrollTop = streamContent.scrollHeight;
+                });
+
+                eventSource.addEventListener('chunk_complete', (e) => {
+                    const data = JSON.parse(e.data);
+                    
+                    progressFill.style.width = `${(data.chunk.index / data.chunk.total) * 100}%`;
+                    
+                    // Show clips found in this chunk
+                    if (data.clips && data.clips.length > 0) {
+                        chunkClipsList.innerHTML = data.clips.map(clip => `
+                            <div class="mini-clip">
+                                <span class="mini-clip-time">${clip.start_time} → ${clip.end_time}</span>
+                                <span class="mini-clip-category category-${clip.category}">${clip.category}</span>
+                            </div>
+                        `).join('');
+                        chunkClips.classList.remove('hidden');
+                    }
+                    
+                    if (data.summary) {
+                        aiOutput.textContent += `\n\n--- Summary: ${data.summary} ---`;
+                    }
+                });
+
+                eventSource.addEventListener('error', (e) => {
+                    if (e.data) {
+                        const data = JSON.parse(e.data);
+                        console.error('Stream error:', data.error);
+                    }
+                });
+
+                eventSource.addEventListener('complete', (e) => {
+                    const data = JSON.parse(e.data);
+                    eventSource.close();
+                    
+                    streamStatus.textContent = 'Complete!';
+                    streamStatus.className = 'stream-status complete';
+                    progressFill.style.width = '100%';
+                    
+                    // Update results
+                    document.getElementById('results-count').textContent = `${data.total} clips found`;
+                    timestampsText.value = data.timestamps;
+
+                    // Render clips
+                    clipsList.innerHTML = data.clips.map((clip, i) => `
+                        <div class="clip-card">
+                            <div class="clip-header">
+                                <span class="clip-number">#${i + 1}</span>
+                                <span class="clip-category category-${clip.category}">${clip.category}</span>
+                                <span class="clip-confidence">${Math.round(clip.confidence * 100)}%</span>
+                            </div>
+                            <div class="clip-time">
+                                <strong>${clip.start_time}</strong> → <strong>${clip.end_time}</strong>
+                                <span class="clip-duration">(${clip.duration}s)</span>
+                            </div>
+                            <div class="clip-reason">${clip.reason}</div>
+                        </div>
+                    `).join('');
+
+                    resultsSection.classList.remove('hidden');
+                    
+                    // Re-enable buttons
+                    analyzeBtn.disabled = false;
+                    dryRunBtn.disabled = false;
+                });
+
+                eventSource.onerror = (err) => {
+                    console.error('EventSource error:', err);
+                    eventSource.close();
+                    streamStatus.textContent = 'Error!';
+                    streamStatus.className = 'stream-status error';
+                    analyzeBtn.disabled = false;
+                    dryRunBtn.disabled = false;
+                };
+
+            } catch (error) {
+                alert('Error: ' + error.message);
+                analyzeBtn.disabled = false;
+                dryRunBtn.disabled = false;
+            }
+        }
+
+        // Copy timestamps
+        document.getElementById('copy-timestamps').addEventListener('click', () => {
+            timestampsText.select();
+            document.execCommand('copy');
+            
+            const btn = document.getElementById('copy-timestamps');
+            const originalText = btn.textContent;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = originalText, 2000);
+        });
+
+        // Loading helpers
+        function showLoading(text) {
+            loadingText.textContent = text;
+            loading.classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            loading.classList.add('hidden');
+        }
+    </script>
+</body>
+</html>

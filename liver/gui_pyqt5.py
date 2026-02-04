@@ -1,6 +1,8 @@
 """Modern PyQt5 GUI for Subtitle Transcriber PRO."""
 import os
 import sys
+import json
+from datetime import datetime
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QGroupBox, QLabel, QComboBox, QLineEdit, QCheckBox, QPushButton,
@@ -13,7 +15,8 @@ from PyQt5.QtGui import QFont, QPalette, QColor, QDragEnterEvent, QDropEvent, QI
 from config import (
     MODELS, LANGUAGES, VAD_METHODS, VOCAL_EXTRACT_METHODS,
     REALIGN_DEVICES, VALID_MEDIA_EXTENSIONS, DEFAULTS,
-    DIARIZE_METHODS, ONE_WORD_OPTIONS, SUBTITLE_PRESETS, MAX_COMMA_CENT_OPTIONS
+    DIARIZE_METHODS, ONE_WORD_OPTIONS, SUBTITLE_PRESETS, MAX_COMMA_CENT_OPTIONS,
+    SETTINGS_FILE
 )
 from transcriber import SubtitleTranscriber
 
@@ -102,6 +105,7 @@ class ModernTranscriptionApp(QMainWindow):
         
         self.init_ui()
         self.apply_modern_style()
+        self.load_settings()  # Load saved settings on startup
         
     def init_ui(self):
         """Initialize the user interface."""
@@ -1036,6 +1040,113 @@ class ModernTranscriptionApp(QMainWindow):
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
+    
+    def get_all_settings(self):
+        """Get all current settings as a dictionary."""
+        return {
+            'model': self.model_combo.currentText(),
+            'language': self.lang_combo.currentText(),
+            'beam_size': self.beam_spin.value(),
+            'best_of': self.best_spin.value(),
+            'vad_method': self.vad_combo.currentText(),
+            'vocal_extract': self.vocal_combo.currentText(),
+            'realign': self.realign_check.isChecked(),
+            'realign_device': self.realign_device_combo.currentText(),
+            'roformer_overlap': self.roformer_overlap_spin.value(),
+            'roformer_vram': self.roformer_vram_spin.value(),
+            'word_timestamps': self.word_timestamps_check.isChecked(),
+            'highlight_words': self.highlight_words_check.isChecked(),
+            'one_word': self.one_word_combo.currentText(),
+            'sentence_split': self.sentence_split_check.isChecked(),
+            'max_line_width': self.max_line_width_spin.value(),
+            'max_line_count': self.max_line_count_spin.value(),
+            'max_comma_cent': self.max_comma_cent_combo.currentText(),
+            'subtitle_preset': self.subtitle_preset_combo.currentText(),
+            'diarize_method': self.diarize_combo.currentText(),
+            'diarize_device': self.diarize_device_combo.currentText(),
+            'num_speakers': self.num_speakers_spin.value(),
+            'min_speakers': self.min_speakers_spin.value(),
+            'max_speakers': self.max_speakers_spin.value(),
+            'last_saved': datetime.now().isoformat(),
+        }
+    
+    def save_settings(self):
+        """Save current settings to JSON file."""
+        try:
+            settings = self.get_all_settings()
+            with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=2, ensure_ascii=False)
+            self.log(f"Settings saved to {SETTINGS_FILE}\n")
+        except Exception as e:
+            self.log(f"Error saving settings: {e}\n")
+    
+    def load_settings(self):
+        """Load settings from JSON file if it exists."""
+        if not os.path.exists(SETTINGS_FILE):
+            return
+        
+        try:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            # Apply settings to UI components (with validation)
+            if settings.get('model') in MODELS:
+                self.model_combo.setCurrentText(settings['model'])
+            if settings.get('language') in LANGUAGES:
+                self.lang_combo.setCurrentText(settings['language'])
+            if 'beam_size' in settings:
+                self.beam_spin.setValue(int(settings['beam_size']))
+            if 'best_of' in settings:
+                self.best_spin.setValue(int(settings['best_of']))
+            if settings.get('vad_method') in VAD_METHODS:
+                self.vad_combo.setCurrentText(settings['vad_method'])
+            if settings.get('vocal_extract') in VOCAL_EXTRACT_METHODS:
+                self.vocal_combo.setCurrentText(settings['vocal_extract'])
+            if 'realign' in settings:
+                self.realign_check.setChecked(bool(settings['realign']))
+            if settings.get('realign_device') in REALIGN_DEVICES:
+                self.realign_device_combo.setCurrentText(settings['realign_device'])
+            if 'roformer_overlap' in settings:
+                self.roformer_overlap_spin.setValue(float(settings['roformer_overlap']))
+            if 'roformer_vram' in settings:
+                self.roformer_vram_spin.setValue(int(settings['roformer_vram']))
+            if 'word_timestamps' in settings:
+                self.word_timestamps_check.setChecked(bool(settings['word_timestamps']))
+            if 'highlight_words' in settings:
+                self.highlight_words_check.setChecked(bool(settings['highlight_words']))
+            if settings.get('one_word') in ONE_WORD_OPTIONS:
+                self.one_word_combo.setCurrentText(settings['one_word'])
+            if 'sentence_split' in settings:
+                self.sentence_split_check.setChecked(bool(settings['sentence_split']))
+            if 'max_line_width' in settings:
+                self.max_line_width_spin.setValue(int(settings['max_line_width']))
+            if 'max_line_count' in settings:
+                self.max_line_count_spin.setValue(int(settings['max_line_count']))
+            if settings.get('max_comma_cent') in MAX_COMMA_CENT_OPTIONS:
+                self.max_comma_cent_combo.setCurrentText(settings['max_comma_cent'])
+            if settings.get('subtitle_preset') in SUBTITLE_PRESETS:
+                self.subtitle_preset_combo.setCurrentText(settings['subtitle_preset'])
+            if settings.get('diarize_method') in DIARIZE_METHODS:
+                self.diarize_combo.setCurrentText(settings['diarize_method'])
+            if settings.get('diarize_device') in ['cuda', 'cpu']:
+                self.diarize_device_combo.setCurrentText(settings['diarize_device'])
+            if 'num_speakers' in settings:
+                self.num_speakers_spin.setValue(int(settings['num_speakers']))
+            if 'min_speakers' in settings:
+                self.min_speakers_spin.setValue(int(settings['min_speakers']))
+            if 'max_speakers' in settings:
+                self.max_speakers_spin.setValue(int(settings['max_speakers']))
+            
+            last_saved = settings.get('last_saved', 'unknown')
+            self.log(f"Loaded settings from {SETTINGS_FILE} (last saved: {last_saved})\n")
+            
+        except Exception as e:
+            self.log(f"Error loading settings: {e}\n")
+    
+    def closeEvent(self, event):
+        """Save settings when the application is closed."""
+        self.save_settings()
+        event.accept()
 
 
 def run_app():

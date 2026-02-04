@@ -1,10 +1,14 @@
 """Configuration and constants for Subtitle Transcriber PRO."""
+import os
 import re
 import logging
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Settings file path (saved in same directory as the script)
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 
 # Regular expression to match subtitle lines
 SUBTITLE_REGEX = re.compile(r'^\[(\d+):(\d{2}\.\d{3}) --> (\d+):(\d{2}\.\d{3})\] (.+)$')
@@ -18,8 +22,8 @@ LANGUAGES = ['en', 'ja', 'zh', 'yue', 'id']
 # Asian languages requiring special formatting
 ASIAN_LANGUAGES = ['ja', 'zh', 'yue']
 
-# VAD methods (Pro feature)
-VAD_METHODS = ['ten', 'silero_v6', 'silero_v6_fw', 'nemo_v2', 'pyannote_v3']
+# VAD methods (Pro feature) - 'none' disables VAD filtering
+VAD_METHODS = ['none', 'ten', 'silero_v6', 'silero_v6_fw', 'nemo_v2', 'pyannote_v3']
 
 # Voice extraction methods (Pro feature)
 VOCAL_EXTRACT_METHODS = ['none', 'mdx1_kim2', 'mdx2_kim2', 'mb-roformer']
