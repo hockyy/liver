@@ -1,2 +1,8 @@
-Pillow>=9.2.0
-pillow-avif-plugin
+PyQt5>=5.15.0
+Pillow>=9.0.0
+pillow-avif>=1.4.0    # For animated AVIF support
+numpy>=1.21.0         # For GPU acceleration path
+
+# Optional GPU acceleration (install one of these for CUDA support):
+# torch                # PyTorch CUDA – best general GPU path
+# opencv-python-headless  # OpenCV with CUDA – good for resizing

@@ -8,6 +8,7 @@ import sys
 import os
 from PIL import Image
 from pathlib import Path
+import pillow_avif  # <-- add this
 import time
 from urllib.request import pathname2url
 
@@ -62,22 +63,24 @@ def convert_to_avif(image_path):
         # If file already exists, append timestamp to avoid overwriting
         if output_path.exists():
             epoch_ms = int(time.time() * 1000)
-            output_path = output_dir / f"{original_stem}_{epoch_ms}.avif"
+            output_path = output_dir / f"{original_stem}.avif"
 
         # Save as AVIF
-        # quality: 0-100 (higher = better quality, larger file)
-        # speed: 0-10 (lower = slower but better compression; 6 is a good balance)
-        print("here")
-        img.save(output_path, 'AVIF', quality=65, speed=6)
+        img.save(output_path, 'AVIF', quality=80, speed=0)
 
-        # Convert to file:// URL format for Typora
-        absolute_path = output_path.absolute()
-        file_url = pathname2url(str(absolute_path))
-        if not file_url.startswith('/'):
-            file_url = '/' + file_url
-        file_url = 'file://' + file_url
+        # Build relative path for Typora
+        absolute_path = str(output_path.absolute())
 
-        print(file_url)
+        if 'assets/' in absolute_path:
+            relative_path = absolute_path[absolute_path.index('assets/'):]
+        elif '\\assets\\' in absolute_path:
+            relative_path = './' + absolute_path[absolute_path.index('assets\\'):].replace('\\', '/')
+        else:
+            # Fallback to file:// URL if no /assets/ found
+            file_url = pathname2url(absolute_path)
+            if not file_url.startswith('/'):
+                file_url = '/' + file_url
+            relative_path = 'file://' + file_url
 
     except Exception as e:
         sys.stderr.write(f"Error: {str(e)}\n")

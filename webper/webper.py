@@ -1,261 +1,281 @@
+"""
+webper – Batch Image Converter (WebP / AVIF) with optional CUDA acceleration.
+
+This is the main entry-point and UI module.  Heavy logic lives in:
+    gpu.py        – GPU detection & accelerated resize
+    converter.py  – static / animated image conversion
+    preview.py    – thumbnail generation & size estimation
+    image_item.py – QListWidgetItem subclass with image metadata
+"""
+
 import sys
 import os
 from io import BytesIO
-from PyQt5.QtWidgets import (QApplication, QWidget, QLabel, QLineEdit, QPushButton, QFileDialog, 
-                             QVBoxLayout, QHBoxLayout, QMessageBox, QSlider, QComboBox, QListWidget,
-                             QListWidgetItem, QGridLayout, QMenu, QAction, QScrollArea, QSplitter)
-from PyQt5.QtGui import QIcon, QDragEnterEvent, QDropEvent, QPalette, QPixmap, QCursor
-from PyQt5.QtCore import Qt, QUrl
-from PIL import Image
 
-class ImageItem(QListWidgetItem):
-    def __init__(self, file_path):
-        super().__init__(os.path.basename(file_path))
-        self.file_path = file_path
-        self.original_size = self.get_image_size()
-        self.new_size = self.original_size
-        self.setText(f"{os.path.basename(file_path)} - {self.original_size[0]}x{self.original_size[1]}")
+# -- project modules (import BEFORE PyQt5 to avoid DLL conflicts on Windows) -
+from gpu import get_gpu_info, get_backend
+from converter import (
+    AVIF_SUPPORTED, VALID_EXTENSIONS, FILE_FILTER,
+    is_image_file, convert_static, convert_animated, get_output_path,
+)
+from preview import (
+    format_file_size, get_file_size_formatted,
+    SizeEstimator, make_thumbnail,
+)
 
-    def get_image_size(self):
-        with Image.open(self.file_path) as img:
-            return img.size
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QLineEdit, QPushButton, QFileDialog,
+    QVBoxLayout, QHBoxLayout, QMessageBox, QSlider, QComboBox, QListWidget,
+    QGridLayout, QMenu, QAction, QScrollArea, QSplitter, QCheckBox,
+)
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QPixmap
+from PyQt5.QtCore import Qt
 
-    def update_new_size(self, width, height):
-        self.new_size = (width, height)
-        self.setText(f"{os.path.basename(self.file_path)} - {self.original_size[0]}x{self.original_size[1]} -> {width}x{height}")
+from image_item import ImageItem  # Depends on PyQt5, must come after
+
 
 class ImageConverterApp(QWidget):
+    """Main application window."""
+
     def __init__(self):
         super().__init__()
-        self.webp_size_cache = {}  # Cache for WebP size calculations
-        self.initUI()
+        self.size_estimator = SizeEstimator()
+        self._init_ui()
 
-    def initUI(self):
-        self.setWindowTitle('Batch Image to WebP Converter')
-        self.setGeometry(300, 300, 900, 600)  # Increased size for preview panel
-        
-        # Enable drag and drop
+    # ==================================================================
+    # UI setup
+    # ==================================================================
+    def _init_ui(self):
+        gpu = get_gpu_info()
+        title = 'Batch Image Converter (WebP/AVIF)' if AVIF_SUPPORTED else 'Batch Image to WebP Converter'
+        if gpu['available']:
+            title += f"  [GPU: {gpu['name']}]"
+        self.setWindowTitle(title)
+        self.setGeometry(300, 300, 950, 650)
         self.setAcceptDrops(True)
 
-        layout = QVBoxLayout()
+        root = QVBoxLayout()
 
-        # Create main horizontal splitter
-        main_splitter = QSplitter(Qt.Horizontal)
-        
-        # Left side - Image list
-        left_widget = QWidget()
-        left_layout = QVBoxLayout()
-        left_layout.addWidget(QLabel('Selected Images (drag & drop images here or use the button below):'))
-        
+        # --- GPU status bar ------------------------------------------------
+        if gpu['available']:
+            gpu_label = QLabel(
+                f"🟢 GPU Acceleration: {gpu['backend']} — {gpu['name']}"
+                + (f" ({gpu['vram_mb']} MB VRAM)" if gpu['vram_mb'] else "")
+            )
+        else:
+            gpu_label = QLabel("⚪ GPU Acceleration: Not available (using CPU)")
+        gpu_label.setStyleSheet(
+            "QLabel { background-color: #dff0d8; border: 1px solid #b2d8a2; padding: 4px; border-radius: 3px; }"
+            if gpu['available'] else
+            "QLabel { background-color: #f5f5f5; border: 1px solid #ddd; padding: 4px; border-radius: 3px; }"
+        )
+        root.addWidget(gpu_label)
+
+        # --- Splitter: image list | preview --------------------------------
+        splitter = QSplitter(Qt.Horizontal)
+
+        # left – file list
+        left = QWidget()
+        ll = QVBoxLayout()
+        ll.addWidget(QLabel('Selected Images (drag & drop or use button below):'))
         self.image_list = QListWidget()
         self.image_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.image_list.customContextMenuRequested.connect(self.show_context_menu)
-        self.image_list.itemSelectionChanged.connect(self.update_preview)
-        left_layout.addWidget(self.image_list)
-        left_widget.setLayout(left_layout)
-        
-        # Right side - Image preview
-        right_widget = QWidget()
-        right_layout = QVBoxLayout()
-        right_layout.addWidget(QLabel('Image Preview:'))
-        
-        # Image info label (dimensions and file size)
-        self.image_info_label = QLabel()
-        self.image_info_label.setAlignment(Qt.AlignCenter)
-        self.image_info_label.setStyleSheet("QLabel { background-color: #e8e8e8; border: 1px solid #ccc; padding: 5px; }")
-        self.image_info_label.setText("No image selected")
-        right_layout.addWidget(self.image_info_label)
-        
-        # Create scrollable preview area
+        self.image_list.customContextMenuRequested.connect(self._ctx_menu)
+        self.image_list.itemSelectionChanged.connect(self._on_selection_changed)
+        ll.addWidget(self.image_list)
+        left.setLayout(ll)
+
+        # right – preview
+        right = QWidget()
+        rl = QVBoxLayout()
+        rl.addWidget(QLabel('Image Preview:'))
+        self.info_label = QLabel("No image selected")
+        self.info_label.setAlignment(Qt.AlignCenter)
+        self.info_label.setStyleSheet(
+            "QLabel { background-color: #e8e8e8; border: 1px solid #ccc; padding: 5px; }"
+        )
+        rl.addWidget(self.info_label)
+
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setAlignment(Qt.AlignCenter)
-        
-        self.preview_label = QLabel()
+        self.preview_label = QLabel("Select an image to preview")
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; }")
+        self.preview_label.setStyleSheet(
+            "QLabel { background-color: #f0f0f0; border: 1px solid #ccc; }"
+        )
         self.preview_label.setMinimumSize(300, 200)
-        self.preview_label.setText("Select an image to preview")
-        
         self.preview_scroll.setWidget(self.preview_label)
-        right_layout.addWidget(self.preview_scroll)
-        right_widget.setLayout(right_layout)
-        
-        # Add widgets to splitter
-        main_splitter.addWidget(left_widget)
-        main_splitter.addWidget(right_widget)
-        main_splitter.setSizes([400, 300])  # Set initial sizes
-        
-        layout.addWidget(main_splitter)
+        rl.addWidget(self.preview_scroll)
+        right.setLayout(rl)
 
-        # Add images button
-        add_button = QPushButton('Add Images')
-        add_button.clicked.connect(self.add_images)
-        layout.addWidget(add_button)
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setSizes([400, 300])
+        root.addWidget(splitter)
 
-        # Resize options
-        resize_layout = QGridLayout()
-        resize_layout.addWidget(QLabel('Resize options:'), 0, 0)
+        # --- Add / Clear buttons ----------------------------------------------
+        btn_row = QHBoxLayout()
+        btn_add = QPushButton('Add Images')
+        btn_add.clicked.connect(self._add_images)
+        btn_row.addWidget(btn_add)
 
-        # Preset sizes
+        btn_clear = QPushButton('Remove All')
+        btn_clear.clicked.connect(self._clear_queue)
+        btn_row.addWidget(btn_clear)
+        root.addLayout(btn_row)
+
+        # --- Resize options ------------------------------------------------
+        grid = QGridLayout()
+        grid.addWidget(QLabel('Resize options:'), 0, 0)
+
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(['Custom', '1920x1080', '1280x720', '800x600', '640x480'])
-        self.preset_combo.currentIndexChanged.connect(self.update_size_from_preset)
-        resize_layout.addWidget(self.preset_combo, 0, 1)
+        self.preset_combo.currentIndexChanged.connect(self._preset_changed)
+        grid.addWidget(self.preset_combo, 0, 1)
 
-        # Custom size input
         self.width_edit = QLineEdit()
         self.width_edit.setPlaceholderText('Max Width')
         self.height_edit = QLineEdit()
         self.height_edit.setPlaceholderText('Max Height')
-        resize_layout.addWidget(self.width_edit, 1, 0)
-        resize_layout.addWidget(QLabel('x'), 1, 1)
-        resize_layout.addWidget(self.height_edit, 1, 2)
+        grid.addWidget(self.width_edit, 1, 0)
+        grid.addWidget(QLabel('x'), 1, 1)
+        grid.addWidget(self.height_edit, 1, 2)
 
-        # Size slider
         self.size_slider = QSlider(Qt.Horizontal)
         self.size_slider.setRange(10, 100)
         self.size_slider.setValue(100)
-        self.size_slider.valueChanged.connect(self.update_size_from_slider)
-        resize_layout.addWidget(QLabel('Scale:'), 2, 0)
-        resize_layout.addWidget(self.size_slider, 2, 1, 1, 2)
+        self.size_slider.valueChanged.connect(self._slider_resize)
+        grid.addWidget(QLabel('Scale:'), 2, 0)
+        grid.addWidget(self.size_slider, 2, 1, 1, 2)
+        root.addLayout(grid)
 
-        layout.addLayout(resize_layout)
+        btn_resize = QPushButton('Apply Resize to All')
+        btn_resize.clicked.connect(self._apply_resize)
+        root.addWidget(btn_resize)
 
-        # Apply resize button
-        apply_resize_button = QPushButton('Apply Resize to All')
-        apply_resize_button.clicked.connect(self.apply_resize_to_all)
-        layout.addWidget(apply_resize_button)
+        # --- Format selection ----------------------------------------------
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel('Output Format:'))
+        self.format_combo = QComboBox()
+        self.format_combo.addItem('WebP')
+        if AVIF_SUPPORTED:
+            self.format_combo.addItem('AVIF')
+        self.format_combo.currentTextChanged.connect(self._format_changed)
+        fmt_row.addWidget(self.format_combo)
+        root.addLayout(fmt_row)
 
-        # Quality slider
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel('Quality:'))
+        # --- Quality preset ------------------------------------------------
+        qp_row = QHBoxLayout()
+        qp_row.addWidget(QLabel('Quality Preset:'))
+        self.quality_preset_combo = QComboBox()
+        self.quality_preset_combo.addItems([
+            'Custom', 'Best (Lossless)', 'High (95)', 'Medium (80)', 'Low (60)',
+        ])
+        self.quality_preset_combo.currentTextChanged.connect(self._quality_preset_changed)
+        qp_row.addWidget(self.quality_preset_combo)
+        root.addLayout(qp_row)
+
+        # --- Options checkboxes --------------------------------------------
+        opts = QVBoxLayout()
+
+        self.chk_preview = QCheckBox(
+            'Enable live preview with size estimates (disable for better performance with many images)'
+        )
+        self.chk_preview.setChecked(True)
+        self.chk_preview.stateChanged.connect(self._preview_toggled)
+        opts.addWidget(self.chk_preview)
+
+        self.chk_trim = QCheckBox('Trim transparent edges (for images with transparency)')
+        self.chk_trim.stateChanged.connect(self._option_changed)
+        opts.addWidget(self.chk_trim)
+
+        self.chk_animation = QCheckBox('Preserve animation (for animated GIFs)')
+        self.chk_animation.setChecked(True)
+        self.chk_animation.stateChanged.connect(self._option_changed)
+        opts.addWidget(self.chk_animation)
+
+        root.addLayout(opts)
+
+        # --- Quality slider ------------------------------------------------
+        q_row = QHBoxLayout()
+        q_row.addWidget(QLabel('Quality:'))
         self.quality_slider = QSlider(Qt.Horizontal)
         self.quality_slider.setRange(1, 100)
         self.quality_slider.setValue(80)
         self.quality_slider.setTickPosition(QSlider.TicksBelow)
         self.quality_slider.setTickInterval(10)
-        quality_layout.addWidget(self.quality_slider)
-        self.quality_label = QLabel('80')
-        quality_layout.addWidget(self.quality_label)
-        self.quality_slider.valueChanged.connect(self.update_quality_label)
-        self.quality_slider.valueChanged.connect(self.update_preview)  # Update preview when quality changes
-        layout.addLayout(quality_layout)
+        q_row.addWidget(self.quality_slider)
+        self.quality_value = QLabel('80')
+        q_row.addWidget(self.quality_value)
+        self.quality_slider.valueChanged.connect(lambda v: self.quality_value.setText(str(v)))
+        self.quality_slider.valueChanged.connect(self._update_preview_if_enabled)
+        root.addLayout(q_row)
 
-        # Convert button
-        convert_button = QPushButton('Convert All to WebP')
-        convert_button.clicked.connect(self.convert_images)
-        layout.addWidget(convert_button)
+        # --- Convert button ------------------------------------------------
+        self.btn_convert = QPushButton('Convert All to WebP')
+        self.btn_convert.clicked.connect(self._convert)
+        root.addWidget(self.btn_convert)
 
-        self.setLayout(layout)
+        self.setLayout(root)
 
-    def add_images(self):
-        file_names, _ = QFileDialog.getOpenFileNames(self, 'Select Input Images', '', 'Image Files (*.png *.jpg *.jpeg *.bmp *.tiff)')
-        for file_name in file_names:
-            self.image_list.addItem(ImageItem(file_name))
+    # ==================================================================
+    # Adding images
+    # ==================================================================
+    def _add_images(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, 'Select Input Images', '', FILE_FILTER)
+        for p in paths:
+            self.image_list.addItem(ImageItem(p))
 
-    def update_size_from_preset(self, index):
-        if index == 0:  # Custom
-            return
-        preset = self.preset_combo.currentText()
-        width, height = map(int, preset.split('x'))
-        self.width_edit.setText(str(width))
-        self.height_edit.setText(str(height))
-        self.apply_resize_to_all()
-
-    def update_size_from_slider(self):
-        scale = self.size_slider.value() / 100
-        for index in range(self.image_list.count()):
-            item = self.image_list.item(index)
-            new_width = int(item.original_size[0] * scale)
-            new_height = int(item.original_size[1] * scale)
-            item.update_new_size(new_width, new_height)
-        # Update preview if an item is selected
-        self.update_preview()
-
-    def apply_resize_to_all(self):
-        try:
-            max_width = int(self.width_edit.text())
-            max_height = int(self.height_edit.text())
-            for index in range(self.image_list.count()):
-                item = self.image_list.item(index)
-                new_size = self.calculate_new_size(item.original_size, max_width, max_height)
-                item.update_new_size(*new_size)
-            # Update preview if an item is selected
-            self.update_preview()
-        except ValueError:
-            QMessageBox.warning(self, 'Error', 'Please enter valid width and height values.')
-
-    def calculate_new_size(self, original_size, max_width, max_height):
-        original_width, original_height = original_size
-        aspect_ratio = original_width / original_height
-
-        if original_width <= max_width and original_height <= max_height:
-            return original_size
-
-        new_width = max_width
-        new_height = int(new_width / aspect_ratio)
-
-        if new_height > max_height:
-            new_height = max_height
-            new_width = int(new_height * aspect_ratio)
-
-        return (new_width, new_height)
-
-    def update_quality_label(self, value):
-        self.quality_label.setText(str(value))
-
-    def convert_images(self):
+    def _clear_queue(self):
         if self.image_list.count() == 0:
-            QMessageBox.warning(self, 'Error', 'Please add images to convert.')
             return
+        self.image_list.clear()
+        self.size_estimator.clear()
+        self._clear_preview()
 
-        quality = self.quality_slider.value()
+    def _add_dropped(self, file_paths):
+        existing = {
+            self.image_list.item(i).file_path
+            for i in range(self.image_list.count())
+        }
+        added = 0
+        for fp in file_paths:
+            if fp not in existing:
+                try:
+                    self.image_list.addItem(ImageItem(fp))
+                    added += 1
+                except Exception as e:
+                    QMessageBox.warning(self, 'Error', f'Failed to add {os.path.basename(fp)}: {e}')
+        if added:
+            QMessageBox.information(self, 'Success', f'Added {added} image(s) to the list.')
 
-        for index in range(self.image_list.count()):
-            item = self.image_list.item(index)
-            input_path = item.file_path
-            output_path = os.path.splitext(input_path)[0] + '.webp'
-
-            try:
-                with Image.open(input_path) as img:
-                    if item.new_size != item.original_size:
-                        img = img.resize(item.new_size, Image.LANCZOS)
-                    img.save(output_path, 'WEBP', quality=quality)
-            except Exception as e:
-                QMessageBox.warning(self, 'Error', f'Failed to convert {item.text()}: {str(e)}')
-
-        QMessageBox.information(self, 'Success', 'All images have been converted to WebP format.')
-
+    # ==================================================================
+    # Drag & drop
+    # ==================================================================
     def dragEnterEvent(self, event: QDragEnterEvent):
-        """Handle drag enter events"""
         if event.mimeData().hasUrls():
-            # Check if any of the dragged items are image files
             for url in event.mimeData().urls():
-                file_path = url.toLocalFile()
-                if self.is_image_file(file_path):
+                if is_image_file(url.toLocalFile()):
                     event.acceptProposedAction()
                     return
         event.ignore()
 
     def dragMoveEvent(self, event):
-        """Handle drag move events"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent):
-        """Handle drop events"""
         if event.mimeData().hasUrls():
-            image_files = []
-            for url in event.mimeData().urls():
-                file_path = url.toLocalFile()
-                if self.is_image_file(file_path):
-                    image_files.append(file_path)
-            
-            if image_files:
-                self.add_dropped_images(image_files)
+            files = [
+                url.toLocalFile()
+                for url in event.mimeData().urls()
+                if is_image_file(url.toLocalFile())
+            ]
+            if files:
+                self._add_dropped(files)
                 event.acceptProposedAction()
             else:
                 QMessageBox.warning(self, 'Warning', 'No valid image files were dropped.')
@@ -263,202 +283,281 @@ class ImageConverterApp(QWidget):
         else:
             event.ignore()
 
-    def is_image_file(self, file_path):
-        """Check if a file is a valid image file"""
-        if not os.path.isfile(file_path):
-            return False
-        
-        valid_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.gif', '.webp'}
-        _, ext = os.path.splitext(file_path.lower())
-        return ext in valid_extensions
+    # ==================================================================
+    # Context menu (right-click)
+    # ==================================================================
+    def _ctx_menu(self, pos):
+        item = self.image_list.itemAt(pos)
+        if item is None:
+            return
+        menu = QMenu()
+        act = QAction("Remove from queue", self)
+        act.triggered.connect(lambda: self._remove_item(item))
+        menu.addAction(act)
+        menu.exec_(self.image_list.mapToGlobal(pos))
 
-    def add_dropped_images(self, file_paths):
-        """Add dropped image files to the list"""
-        added_count = 0
-        for file_path in file_paths:
-            # Check if file is already in the list
-            already_added = False
-            for index in range(self.image_list.count()):
-                item = self.image_list.item(index)
-                if item.file_path == file_path:
-                    already_added = True
-                    break
-            
-            if not already_added:
-                try:
-                    self.image_list.addItem(ImageItem(file_path))
-                    added_count += 1
-                except Exception as e:
-                    QMessageBox.warning(self, 'Error', f'Failed to add {os.path.basename(file_path)}: {str(e)}')
-        
-        if added_count > 0:
-            QMessageBox.information(self, 'Success', f'Added {added_count} image(s) to the list.')
-
-    def get_file_size_formatted(self, file_path):
-        """Get file size in human-readable format"""
-        try:
-            size_bytes = os.path.getsize(file_path)
-            return self.format_file_size(size_bytes)
-        except OSError:
-            return "Unknown size"
-
-    def format_file_size(self, size_bytes):
-        """Format file size in bytes to human-readable format"""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        else:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-
-    def get_webp_size_estimate(self, file_path, target_size=None):
-        """Get estimated WebP file size with caching"""
-        quality = self.quality_slider.value()
-        
-        # Create cache key
-        if target_size:
-            cache_key = f"{file_path}_{quality}_{target_size[0]}x{target_size[1]}"
-        else:
-            cache_key = f"{file_path}_{quality}_original"
-        
-        # Check cache first
-        if cache_key in self.webp_size_cache:
-            return self.webp_size_cache[cache_key]
-        
-        try:
-            with Image.open(file_path) as img:
-                # Convert to RGB if necessary
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
-                # Resize if target size is specified
-                if target_size and target_size != img.size:
-                    img = img.resize(target_size, Image.LANCZOS)
-                
-                # Convert to WebP in memory
-                webp_buffer = BytesIO()
-                img.save(webp_buffer, 'WEBP', quality=quality)
-                webp_size = webp_buffer.tell()
-                
-                # Cache the result
-                self.webp_size_cache[cache_key] = webp_size
-                
-                return webp_size
-                
-        except Exception:
-            return None
-
-    def show_context_menu(self, position):
-        """Show context menu for right-click on image list"""
-        item = self.image_list.itemAt(position)
-        if item is not None:
-            menu = QMenu()
-            
-            remove_action = QAction("Remove from queue", self)
-            remove_action.triggered.connect(lambda: self.remove_selected_image(item))
-            menu.addAction(remove_action)
-            
-            # Show menu at cursor position
-            menu.exec_(self.image_list.mapToGlobal(position))
-
-    def remove_selected_image(self, item):
-        """Remove the selected image from the list"""
+    def _remove_item(self, item):
         row = self.image_list.row(item)
         if row >= 0:
-            removed_item = self.image_list.takeItem(row)
-            if removed_item:
-                # Clear preview if this was the selected item
+            removed = self.image_list.takeItem(row)
+            if removed:
                 if self.image_list.currentItem() is None:
-                    self.clear_preview()
-                QMessageBox.information(self, 'Removed', f'Removed {os.path.basename(removed_item.file_path)} from queue.')
+                    self._clear_preview()
+                QMessageBox.information(
+                    self, 'Removed',
+                    f'Removed {os.path.basename(removed.file_path)} from queue.',
+                )
 
-    def update_preview(self):
-        """Update the image preview when selection changes"""
-        current_item = self.image_list.currentItem()
-        if current_item and hasattr(current_item, 'file_path'):
-            self.load_image_preview(current_item.file_path)
-        else:
-            self.clear_preview()
+    # ==================================================================
+    # Resize helpers
+    # ==================================================================
+    @staticmethod
+    def _calc_new_size(original, max_w, max_h):
+        ow, oh = original
+        ratio = ow / oh
+        if ow <= max_w and oh <= max_h:
+            return original
+        nw = max_w
+        nh = int(nw / ratio)
+        if nh > max_h:
+            nh = max_h
+            nw = int(nh * ratio)
+        return (nw, nh)
 
-    def load_image_preview(self, file_path):
-        """Load and display image preview"""
+    def _preset_changed(self, index):
+        if index == 0:
+            return
+        w, h = map(int, self.preset_combo.currentText().split('x'))
+        self.width_edit.setText(str(w))
+        self.height_edit.setText(str(h))
+        self._apply_resize()
+
+    def _slider_resize(self):
+        scale = self.size_slider.value() / 100
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            nw = int(item.original_size[0] * scale)
+            nh = int(item.original_size[1] * scale)
+            item.update_new_size(nw, nh)
+        self._update_preview_if_enabled()
+
+    def _apply_resize(self):
         try:
-            # Get original file size
-            original_size = self.get_file_size_formatted(file_path)
-            
-            # Open image with PIL to handle various formats
-            with Image.open(file_path) as img:
-                # Convert to RGB if necessary (for RGBA, etc.)
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
-                
-                img_width, img_height = img.size
-                
-                # Get current item to check for resize settings
-                current_item = self.image_list.currentItem()
-                target_size = None
-                if current_item and hasattr(current_item, 'new_size') and current_item.new_size != (img_width, img_height):
-                    target_size = current_item.new_size
-                
-                # Get estimated WebP size
-                webp_size_bytes = self.get_webp_size_estimate(file_path, target_size)
-                
-                # Format info text
-                filename = os.path.basename(file_path)
-                if webp_size_bytes:
-                    webp_size = self.format_file_size(webp_size_bytes)
-                    original_bytes = os.path.getsize(file_path)
-                    compression_ratio = (1 - webp_size_bytes / original_bytes) * 100
-                    
-                    size_info = f"{original_size} → {webp_size} (−{compression_ratio:.1f}%)"
-                    if target_size:
-                        self.image_info_label.setText(f"{filename}\n{img_width} × {img_height} px → {target_size[0]} × {target_size[1]} px\n{size_info}")
-                    else:
-                        self.image_info_label.setText(f"{filename}\n{img_width} × {img_height} px\n{size_info}")
-                else:
-                    # Fallback if WebP estimation fails
-                    if target_size:
-                        self.image_info_label.setText(f"{filename}\n{img_width} × {img_height} px → {target_size[0]} × {target_size[1]} px\n{original_size} → WebP (calculating...)")
-                    else:
-                        self.image_info_label.setText(f"{filename}\n{img_width} × {img_height} px\n{original_size} → WebP (calculating...)")
-                
-                # Calculate preview size while maintaining aspect ratio
-                preview_width = 400
-                preview_height = 300
-                
-                # Calculate scaling factor
-                scale_w = preview_width / img_width
-                scale_h = preview_height / img_height
-                scale = min(scale_w, scale_h, 1.0)  # Don't upscale
-                
-                new_width = int(img_width * scale)
-                new_height = int(img_height * scale)
-                
-                # Resize image
-                img_resized = img.resize((new_width, new_height), Image.LANCZOS)
-                
-                # Convert PIL image to QPixmap
-                img_resized.save('temp_preview.png')  # Temporary save
-                pixmap = QPixmap('temp_preview.png')
-                os.remove('temp_preview.png')  # Clean up
-                
-                # Update preview
-                self.preview_label.setPixmap(pixmap)
-                self.preview_label.setText("")  # Clear text
-                
-        except Exception as e:
-            self.clear_preview()
-            self.preview_label.setText(f"Error loading image:\n{str(e)}")
-            self.image_info_label.setText(f"Error: {str(e)}")
+            mw = int(self.width_edit.text())
+            mh = int(self.height_edit.text())
+        except ValueError:
+            QMessageBox.warning(self, 'Error', 'Please enter valid width and height values.')
+            return
+        for i in range(self.image_list.count()):
+            item = self.image_list.item(i)
+            item.update_new_size(*self._calc_new_size(item.original_size, mw, mh))
+        self._update_preview_if_enabled()
 
-    def clear_preview(self):
-        """Clear the image preview"""
+    # ==================================================================
+    # Option / combo handlers
+    # ==================================================================
+    def _format_changed(self, text):
+        self.btn_convert.setText(f'Convert All to {text}')
+        self.size_estimator.clear()
+        self._update_preview_if_enabled()
+
+    def _quality_preset_changed(self, text):
+        presets = {'Best (Lossless)': 100, 'High (95)': 95, 'Medium (80)': 80, 'Low (60)': 60}
+        if text in presets:
+            self.quality_slider.setValue(presets[text])
+            self.quality_slider.setEnabled(text != 'Best (Lossless)')
+        else:
+            self.quality_slider.setEnabled(True)
+        self.size_estimator.clear()
+        self._update_preview_if_enabled()
+
+    def _option_changed(self):
+        self.size_estimator.clear()
+        self._update_preview_if_enabled()
+
+    def _preview_toggled(self):
+        if self.chk_preview.isChecked():
+            self._on_selection_changed()
+        else:
+            self.size_estimator.clear()
+            cur = self.image_list.currentItem()
+            if cur and hasattr(cur, 'file_path'):
+                self.info_label.setText(
+                    f"{os.path.basename(cur.file_path)}\n"
+                    "Live preview disabled for performance\n"
+                    "Enable checkbox above to see size estimates"
+                )
+                self._show_thumbnail(cur.file_path)
+            else:
+                self.info_label.setText(
+                    "Live preview disabled\nEnable checkbox above for size estimates"
+                )
+
+    # ==================================================================
+    # Preview
+    # ==================================================================
+    def _on_selection_changed(self):
+        cur = self.image_list.currentItem()
+        if not cur or not hasattr(cur, 'file_path'):
+            self._clear_preview()
+            return
+        if self.chk_preview.isChecked():
+            self._load_full_preview(cur)
+        else:
+            self.info_label.setText(
+                f"{os.path.basename(cur.file_path)}\n"
+                "Live preview disabled for performance\n"
+                "Enable checkbox above to see size estimates"
+            )
+            self._show_thumbnail(cur.file_path)
+
+    def _update_preview_if_enabled(self):
+        if self.chk_preview.isChecked():
+            self._on_selection_changed()
+
+    def _show_thumbnail(self, file_path: str):
+        """Display a thumbnail without any size calculations."""
+        thumb = make_thumbnail(file_path)
+        if thumb is None:
+            self.preview_label.setText("Error loading image")
+            return
+        # PIL → QPixmap via in-memory PNG
+        buf = BytesIO()
+        thumb.save(buf, 'PNG')
+        buf.seek(0)
+        pm = QPixmap()
+        pm.loadFromData(buf.getvalue())
+        self.preview_label.setPixmap(pm)
+        self.preview_label.setText("")
+
+    def _load_full_preview(self, item: ImageItem):
+        """Show thumbnail + size estimate info."""
+        fp = item.file_path
+        try:
+            from PIL import Image as _Img
+            with _Img.open(fp) as img:
+                img_w, img_h = img.size
+
+            original_size_str = get_file_size_formatted(fp)
+            fmt = self.format_combo.currentText()
+            preserve_anim = self.chk_animation.isChecked()
+            is_anim = item.is_animated
+            will_anim = is_anim and preserve_anim
+            frames = item.frame_count if is_anim else 1
+
+            target = item.new_size if item.new_size != (img_w, img_h) else None
+
+            # Size estimate
+            est = self.size_estimator.estimate(
+                fp, fmt,
+                self.quality_slider.value(),
+                self.quality_preset_combo.currentText(),
+                target,
+                self.chk_trim.isChecked(),
+                will_anim,
+                frames,
+            )
+
+            # -- Build info text --
+            filename = os.path.basename(fp)
+            dim = f"{img_w} x {img_h} px"
+            if is_anim:
+                dim += f" ({frames} frames, {'will preserve animation' if will_anim else 'first frame only'})"
+            if target:
+                dim += f" -> {target[0]} x {target[1]} px"
+
+            if est:
+                est_str = format_file_size(est)
+                orig_bytes = os.path.getsize(fp)
+                ratio = (1 - est / orig_bytes) * 100
+                size_line = f"{original_size_str} -> {est_str} (-{ratio:.1f}%)"
+                if will_anim:
+                    size_line += f"\nAnimated {fmt}"
+                elif is_anim:
+                    size_line += f"\nStatic {fmt} (first frame)"
+                self.info_label.setText(f"{filename}\n{dim}\n{size_line}")
+            else:
+                calc = f"{original_size_str} -> {fmt} (calculating...)"
+                if will_anim:
+                    calc = f"{original_size_str} -> Animated {fmt} (calculating...)"
+                elif is_anim:
+                    calc = f"{original_size_str} -> Static {fmt} (calculating...)"
+                self.info_label.setText(f"{filename}\n{dim}\n{calc}")
+
+            self._show_thumbnail(fp)
+
+        except Exception as e:
+            self._clear_preview()
+            self.preview_label.setText(f"Error loading image:\n{e}")
+            self.info_label.setText(f"Error: {e}")
+
+    def _clear_preview(self):
         self.preview_label.clear()
         self.preview_label.setText("Select an image to preview")
-        self.image_info_label.setText("No image selected")
+        self.info_label.setText("No image selected")
 
+    # ==================================================================
+    # Conversion
+    # ==================================================================
+    def _convert(self):
+        count = self.image_list.count()
+        if count == 0:
+            QMessageBox.warning(self, 'Error', 'Please add images to convert.')
+            return
+
+        fmt = self.format_combo.currentText()
+        quality = self.quality_slider.value()
+        preset = self.quality_preset_combo.currentText()
+        trim = self.chk_trim.isChecked()
+        keep_anim = self.chk_animation.isChecked()
+
+        if fmt == 'AVIF' and not AVIF_SUPPORTED:
+            QMessageBox.warning(
+                self, 'Error',
+                'AVIF support is not available.\npip install pillow-avif',
+            )
+            return
+
+        anim_count = sum(
+            1 for i in range(count) if self.image_list.item(i).is_animated
+        )
+        if anim_count and keep_anim:
+            reply = QMessageBox.question(
+                self, 'Animated Images Detected',
+                f'Found {anim_count} animated image(s).  '
+                f'Converting to animated {fmt} may take longer.\n\nContinue?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        for i in range(count):
+            item = self.image_list.item(i)
+            out = get_output_path(item.file_path, fmt)
+            try:
+                if item.is_animated and keep_anim:
+                    convert_animated(
+                        item.file_path, out,
+                        item.new_size, item.original_size, item.frame_count,
+                        fmt, quality, preset, trim,
+                    )
+                else:
+                    convert_static(
+                        item.file_path, out,
+                        item.new_size, item.original_size,
+                        fmt, quality, preset, trim,
+                    )
+            except Exception as e:
+                QMessageBox.warning(self, 'Error', f'Failed to convert {item.text()}: {e}')
+
+        QMessageBox.information(self, 'Success', f'All images have been converted to {fmt} format.')
+
+
+# ======================================================================
+# Entry point
+# ======================================================================
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    ex = ImageConverterApp()
-    ex.show()
+    win = ImageConverterApp()
+    win.show()
     sys.exit(app.exec_())

@@ -1,47 +1,32 @@
-# Python
+# Cache files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv/
-.env/
+# Temporary files
+temp_preview.png
+*.tmp
 
-# IDE
+# WebP conversion cache
+webp_cache/
+avif_cache/
+
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# Application specific
-temp_preview.png
-webp_cache/
-*.tmp
+# Build files
+build/
+dist/
+*.egg-info/
 
-# Logs
-*.log
+# Virtual environment
+venv/
+env/
