@@ -80,6 +80,7 @@ class ConvertThread(QThread):
                     "-i", self.input_path,
                     "-vf", filter_str,
                     "-c:v", "libaom-av1",
+                    "-still-picture", "0",
                     "-crf", str(crf),
                     "-b:v", "0",
                     "-cpu-used", "6",
@@ -111,7 +112,7 @@ class DropArea(QLabel):
     def __init__(self):
         super().__init__()
         self.setAlignment(Qt.AlignCenter)
-        self.setText("Drag & Drop MOV file here\nor click Browse")
+        self.setText("Drag & drop a video file here\nor click Browse")
         self.setStyleSheet("""
             QLabel {
                 border: 2px dashed #aaa;
@@ -173,7 +174,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
     
     def init_ui(self):
-        self.setWindowTitle("MOV to WebP Converter")
+        self.setWindowTitle("Video to WebP / AVIF")
         self.setMinimumSize(500, 650)
         
         central_widget = QWidget()
@@ -283,7 +284,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(output_group)
         
         # Convert button
-        self.convert_btn = QPushButton("Convert to WebP")
+        self.convert_btn = QPushButton("Convert")
         self.convert_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -304,6 +305,7 @@ class MainWindow(QMainWindow):
         self.convert_btn.clicked.connect(self.start_conversion)
         self.convert_btn.setEnabled(False)
         layout.addWidget(self.convert_btn)
+        self.on_format_changed()
         
         # Progress bar
         self.progress_bar = QProgressBar()
@@ -320,6 +322,10 @@ class MainWindow(QMainWindow):
         self.quality_label.setText(str(value))
     
     def on_format_changed(self):
+        # Loop applies to animated WebP only; AVIF repeat is not wired in FFmpeg here
+        is_webp = self.format_combo.currentData() == "webp"
+        self.loop_spin.setEnabled(is_webp)
+        self.convert_btn.setText("Convert to WebP" if is_webp else "Convert to AVIF")
         # Update output file extension when format changes
         if self.output_edit.text():
             current_path = Path(self.output_edit.text())
@@ -330,9 +336,9 @@ class MainWindow(QMainWindow):
     def browse_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select MOV file",
+            "Select video file",
             "",
-            "Video files (*.mov *.MOV *.mp4 *.MP4);;All files (*.*)"
+            "Video files (*.mov *.MOV *.mp4 *.MP4 *.webm *.WEBM *.mkv *.MKV);;All files (*.*)"
         )
         if file_path:
             self.set_input_file(file_path)
