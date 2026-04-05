@@ -66,13 +66,14 @@ def convert_to_avif(image_path):
             output_path = output_dir / f"{original_stem}.avif"
 
         # Save as AVIF
-        img.save(output_path, 'AVIF', quality=80, speed=0)
-
+        img.save(output_path, 'AVIF', quality=100, speed=0)
+        return
         # Build relative path for Typora
         absolute_path = str(output_path.absolute())
+        print(absolute_path)
 
         if 'assets/' in absolute_path:
-            relative_path = absolute_path[absolute_path.index('assets/'):]
+            relative_path = '../' + absolute_path[absolute_path.index('assets/'):]
         elif '\\assets\\' in absolute_path:
             relative_path = './' + absolute_path[absolute_path.index('assets\\'):].replace('\\', '/')
         else:
@@ -81,6 +82,7 @@ def convert_to_avif(image_path):
             if not file_url.startswith('/'):
                 file_url = '/' + file_url
             relative_path = 'file://' + file_url
+        print(relative_path)
 
     except Exception as e:
         sys.stderr.write(f"Error: {str(e)}\n")
