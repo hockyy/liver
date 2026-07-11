@@ -4,7 +4,14 @@ import sys
 import threading
 import subprocess
 from config import logger, SUBTITLE_REGEX, ASIAN_LANGUAGES
-from utils import clean_srt, format_timestamp_from_match
+from utils import (
+    clean_srt,
+    fix_highlight_srt_gaps,
+    build_karaoke_srt_from_json,
+    prepare_karaoke_srt_from_oneword,
+    rebuild_karaoke_from_words_json,
+    format_timestamp_from_match,
+)
 
 
 class SubtitleTranscriber:
@@ -57,10 +64,27 @@ class SubtitleTranscriber:
         base_name = os.path.splitext(os.path.basename(audio_file))[0]
         lang = options.get('lang', '')
         cjk_srt_file = os.path.join(output_dir, f"{base_name}.srt")
+        json_file = os.path.join(output_dir, f"{base_name}.json")
+        words_json_file = os.path.join(output_dir, f"{base_name}.words.json")
 
         if os.path.exists(cjk_srt_file):
-            log_callback(f"Transcription already exists at {cjk_srt_file}\n")
-            return
+            if self._uses_karaoke_rebuild(options):
+                if os.path.exists(words_json_file):
+                    log_callback(
+                        f"Rebuilding karaoke SRT from {os.path.basename(words_json_file)}\n"
+                    )
+                    self._post_process_srt(
+                        cjk_srt_file, options, log_callback, words_json_file=words_json_file
+                    )
+                    return
+                log_callback(
+                    "Karaoke mode needs per-word timings — re-transcribing "
+                    "(missing .words.json from one-word pass).\n"
+                )
+            else:
+                log_callback(f"Transcription already exists at {cjk_srt_file}\n")
+                self._post_process_srt(cjk_srt_file, options, log_callback)
+                return
 
         # Build command
         command = self._build_command(audio_file, output_dir, lang, options)
@@ -99,18 +123,117 @@ class SubtitleTranscriber:
             return
 
         # Post-process if transcription completed
-        if os.path.exists(cjk_srt_file):
+        if self._uses_karaoke_rebuild(options):
+            if os.path.exists(words_json_file) or os.path.exists(cjk_srt_file):
+                log_callback(
+                    "Transcription completed. Building karaoke SRT from per-word timings.\n"
+                )
+                self._post_process_srt(
+                    cjk_srt_file,
+                    options,
+                    log_callback,
+                    words_json_file=words_json_file,
+                )
+            else:
+                log_callback("Transcription failed or was stopped before completion.\n")
+        elif os.path.exists(cjk_srt_file):
             log_callback(f"Transcription completed. SRT file saved at {cjk_srt_file}\n")
-            try:
-                clean_srt(cjk_srt_file)
-                log_callback(f"Cleaned {cjk_srt_file}\n")
-            except Exception as e:
-                log_callback(f"Note: Could not clean SRT file: {e}\n")
+            self._post_process_srt(cjk_srt_file, options, log_callback)
         else:
             log_callback("Transcription failed or was stopped before completion.\n")
 
+    def _uses_karaoke_rebuild(self, options):
+        """Whether we build highlight SRT from JSON word timings ourselves."""
+        return (
+            options.get('highlight_words', False)
+            and options.get('word_timestamps', True)
+            and not options.get('realign', False)
+            and not options.get('sentence_split', False)
+        )
+
+    def _post_process_srt(self, srt_file, options, log_callback, words_json_file=None):
+        """Clean SRT output; build or fix karaoke highlight timing."""
+        base_dir = os.path.dirname(srt_file)
+        base_name = os.path.splitext(os.path.basename(srt_file))[0]
+        json_file = os.path.join(base_dir, f"{base_name}.json")
+        if words_json_file is None:
+            words_json_file = os.path.join(base_dir, f"{base_name}.words.json")
+
+        max_line_width = options.get('max_line_width', 25)
+        max_line_count = options.get('max_line_count', 1)
+        comma_break_percent = self._comma_break_percent(options)
+
+        try:
+            if self._uses_karaoke_rebuild(options):
+                built = False
+                if os.path.exists(srt_file):
+                    try:
+                        with open(srt_file, encoding='utf-8-sig') as handle:
+                            sample = handle.read(4096)
+                    except OSError:
+                        sample = ''
+                    if '<u>' not in sample:
+                        built = prepare_karaoke_srt_from_oneword(
+                            srt_file,
+                            words_json_file,
+                            srt_file,
+                            max_line_width=max_line_width,
+                            max_line_count=max_line_count,
+                            comma_break_percent=comma_break_percent,
+                        )
+                        if built:
+                            log_callback(
+                                f"Saved per-word timings → {words_json_file}\n"
+                            )
+                if not built and os.path.exists(words_json_file):
+                    built = rebuild_karaoke_from_words_json(
+                        words_json_file,
+                        srt_file,
+                        max_line_width=max_line_width,
+                        max_line_count=max_line_count,
+                        comma_break_percent=comma_break_percent,
+                    )
+                if not built and os.path.exists(json_file):
+                    built = build_karaoke_srt_from_json(
+                        json_file,
+                        srt_file,
+                        max_line_width=max_line_width,
+                        max_line_count=max_line_count,
+                        comma_break_percent=comma_break_percent,
+                    )
+                if built:
+                    log_callback(
+                        f"Built karaoke SRT from per-word timings → {srt_file}\n"
+                    )
+                else:
+                    log_callback(
+                        "Warning: Could not build karaoke SRT from word timings\n"
+                    )
+            clean_srt(srt_file)
+            log_callback(f"Cleaned {srt_file}\n")
+            if options.get('highlight_words', False) and not os.path.exists(words_json_file):
+                if fix_highlight_srt_gaps(srt_file):
+                    log_callback(
+                        "Trimmed legacy highlight cues that spanned silence gaps\n"
+                    )
+        except Exception as e:
+            log_callback(f"Note: Could not clean SRT file: {e}\n")
+
+    def _comma_break_percent(self, options):
+        """Map max_comma_cent setting to wrap scoring (100 = prefer not breaking at commas)."""
+        value = options.get('max_comma_cent', '100 - Disabled')
+        if isinstance(value, str):
+            token = value.split()[0]
+            try:
+                return int(token)
+            except ValueError:
+                return 70
+        return int(value)
+
     def _build_command(self, audio_file, output_dir, lang, options):
         """Build the faster-whisper-xxl command with all options."""
+        karaoke_rebuild = self._uses_karaoke_rebuild(options)
+
         command = [
             'faster-whisper-xxl.exe', audio_file,
             '--model', self.model,
@@ -130,43 +253,76 @@ class SubtitleTranscriber:
             command.extend(['--vad_filter', 'false'])
         else:
             command.extend(['--vad_filter', 'true', '--vad_method', vad_method])
-        
-        # Add standard formatting based on language
-        command.append('--standard_asia' if lang in ASIAN_LANGUAGES else '--standard')
+            if 'vad_min_silence_duration_ms' in options:
+                command.extend([
+                    '--vad_min_silence_duration_ms',
+                    str(options['vad_min_silence_duration_ms']),
+                ])
+            if 'vad_speech_pad_ms' in options:
+                command.extend([
+                    '--vad_speech_pad_ms',
+                    str(options['vad_speech_pad_ms']),
+                ])
 
-        # Add word timestamps settings (PRO FEATURE)
         word_timestamps = options.get('word_timestamps', True)
         command.extend(['--word_timestamps', str(word_timestamps).lower()])
-        
-        if options.get('highlight_words', False):
-            command.extend(['--highlight_words', 'true'])
-        
-        # Add one word per line setting
+
+        if word_timestamps and options.get('hallucination_silence_threshold') is not None:
+            command.extend([
+                '--hallucination_silence_threshold',
+                str(options['hallucination_silence_threshold']),
+            ])
+
+        realign = options.get('realign', False)
+        sentence_split = options.get('sentence_split', False)
+        highlight_words = options.get('highlight_words', False)
+
         one_word_setting = options.get('one_word', '0 - Disabled')
         if isinstance(one_word_setting, str):
-            one_word_value = one_word_setting.split(' ')[0]  # Extract just the number
+            one_word_value = one_word_setting.split(' ')[0]
         else:
             one_word_value = str(one_word_setting)
-        if one_word_value != '0':
+        one_word_active = (
+            word_timestamps
+            and not realign
+            and one_word_value != '0'
+            and not karaoke_rebuild
+        )
+
+        # --standard / --standard_asia auto-enable --sentence, which disables karaoke.
+        skip_standard_preset = (
+            word_timestamps
+            and not realign
+            and (highlight_words or one_word_active or karaoke_rebuild)
+            and not sentence_split
+        )
+
+        if not skip_standard_preset and not sentence_split:
+            command.append('--standard_asia' if lang in ASIAN_LANGUAGES else '--standard')
+
+        # Karaoke rebuild uses one-word-per-line SRT for tight timings, then we
+        # save .words.json and assemble highlight captions ourselves.
+        if karaoke_rebuild:
+            command.extend(['--one_word', '2'])
+        elif one_word_active:
             command.extend(['--one_word', one_word_value])
         
-        # Add subtitle format settings (for brainrot/short-form content)
-        sentence_split = options.get('sentence_split', False)
+        # Add subtitle format settings (for brainrot/short-form content).
+        # TikTok / lyrics karaoke skips these — we wrap words into lines ourselves.
         if sentence_split:
             command.append('--sentence')
-        
-        max_line_width = options.get('max_line_width', 1000)
-        command.extend(['--max_line_width', str(max_line_width)])
-        
-        max_line_count = options.get('max_line_count', 1)
-        command.extend(['--max_line_count', str(max_line_count)])
-        
-        # Add max_comma_cent if sentence splitting is enabled
-        max_comma_cent = options.get('max_comma_cent', '100 - Disabled')
-        if sentence_split and max_comma_cent != '100 - Disabled':
-            # Extract just the number from options like "70" or "100 - Disabled"
-            comma_value = max_comma_cent.split(' ')[0]
-            command.extend(['--max_comma_cent', comma_value])
+
+        if not karaoke_rebuild:
+            max_line_width = options.get('max_line_width', 1000)
+            command.extend(['--max_line_width', str(max_line_width)])
+
+            max_line_count = options.get('max_line_count', 1)
+            command.extend(['--max_line_count', str(max_line_count)])
+
+            max_comma_cent = options.get('max_comma_cent', '100 - Disabled')
+            if sentence_split and max_comma_cent != '100 - Disabled':
+                comma_value = max_comma_cent.split(' ')[0]
+                command.extend(['--max_comma_cent', comma_value])
 
         # Add voice extraction if specified (PRO FEATURE)
         vocal_extract = options.get('vocal_extract')

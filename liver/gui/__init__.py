@@ -1,7 +1,4 @@
-"""Backward-compatible entry point for the PyQt5 GUI."""
+"""PyQt5 GUI package for Subtitle Transcriber PRO."""
 from gui.app import ModernTranscriptionApp, run_app
 
 __all__ = ['ModernTranscriptionApp', 'run_app']
-
-if __name__ == '__main__':
-    run_app()

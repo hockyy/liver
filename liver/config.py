@@ -34,11 +34,21 @@ REALIGN_DEVICES = ['automatic', 'cuda', 'cpu']
 # Diarization methods (Pro feature - speaker separation)
 DIARIZE_METHODS = ['none', 'pyannote_v3.0', 'pyannote_v3.1', 'reverb_v1', 'reverb_v2']
 
-# One word per line options
+# One word per line options (internal — karaoke rebuild uses one_word 2 automatically)
 ONE_WORD_OPTIONS = ['0 - Disabled', '1 - One word/line', '2 - One word + min 50ms']
 
-# Subtitle length presets for different content types
-SUBTITLE_PRESETS = ['Default', 'Brainrot (Short)', 'YouTube Shorts', 'TikTok', 'Custom']
+# Default TikTok caption layout (applied when TikTok mode is enabled)
+TIKTOK_LAYOUT_DEFAULTS = {
+    'max_line_width': 25,
+    'max_line_count': 1,
+}
+
+# Tighter VAD + silence skip when using word highlights (TikTok)
+HIGHLIGHT_SILENCE_OPTIONS = {
+    'hallucination_silence_threshold': 2.0,
+    'vad_min_silence_duration_ms': 500,
+    'vad_speech_pad_ms': 400,
+}
 
 # Max comma cent options (percentage of line width to break at comma)
 MAX_COMMA_CENT_OPTIONS = ['100 - Disabled', '90', '80', '70', '60', '50', '40', '30', '20']
@@ -57,25 +67,26 @@ DEFAULTS = {
     'best_of': '5',
     'vad_method': 'ten',
     'vocal_extract': 'mb-roformer',
-    'realign': True,
-    'realign_device': 'automatic',
     'roformer_overlap': '0.25',
     'roformer_vram': '4',
     # Diarization settings
     'diarize_method': 'none',
     'diarize_device': 'cuda',
-    'num_speakers': 0,  # 0 = auto-detect
+    'num_speakers': 0,
     'min_speakers': 1,
     'max_speakers': 10,
-    # Word-level timestamp settings
+    # Subtitle output
+    'tiktok_mode': False,
+    'realign': True,
+    'realign_device': 'automatic',
+    # Word-level timestamp settings (TikTok mode sets highlight_words via UI)
     'word_timestamps': True,
     'highlight_words': False,
     'one_word': '0 - Disabled',
-    # Subtitle format settings (for brainrot/short-form content)
-    'sentence_split': False,   # Enable sentence splitting (--sentence flag)
-    'max_line_width': 1000,    # Max characters per line (1000 = essentially no limit)
-    'max_line_count': 1,       # Max lines per subtitle (1-4)
-    'max_comma_cent': '100 - Disabled',  # Break at comma after this % of line width
-    'subtitle_preset': 'Default',
+    # Line layout (standard mode — TikTok uses TIKTOK_LAYOUT_DEFAULTS when toggled on)
+    'sentence_split': False,
+    'max_line_width': 1000,
+    'max_line_count': 1,
+    'max_comma_cent': '100 - Disabled',
 }
 
