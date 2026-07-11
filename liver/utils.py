@@ -1,8 +1,12 @@
 """Utility functions for subtitle processing."""
 import codecs
 import json
+import os
 import re
+import shutil
 from datetime import timedelta
+
+from config import ONEWORD_SRT_SUFFIX
 
 SRT_BLOCK_RE = re.compile(
     r'(\d+)\s*\n'
@@ -106,102 +110,97 @@ def parse_words_from_oneword_srt(srt_path, min_duration=0.05):
     return words
 
 
-def write_words_json(words, json_path):
-    """Save one normalized entry per word for karaoke rebuild."""
-    payload = {
-        'words': [
-            {
-                'start': word['start'],
-                'end': word['end'],
-                'text': word['text'],
-            }
-            for word in words
-        ],
-    }
-    with codecs.open(json_path, 'w', encoding='utf-8') as file:
-        json.dump(payload, file, indent=2, ensure_ascii=False)
-        file.write('\n')
+def oneword_srt_path(srt_path):
+    """Path for the preserved whisper one-word SRT beside the final karaoke SRT."""
+    base, _ext = os.path.splitext(srt_path)
+    return base + ONEWORD_SRT_SUFFIX
 
 
-def read_words_json(json_path):
-    with codecs.open(json_path, 'r', encoding='utf-8-sig') as file:
-        data = json.load(file)
-
-    words = []
-    for entry in data.get('words', []):
-        text = entry.get('text', '')
-        if not text or not str(text).strip():
-            continue
-        start = entry.get('start')
-        end = entry.get('end')
-        if start is None or end is None:
-            continue
-        words.append({
-            'start': float(start),
-            'end': float(end),
-            'text': str(text).strip(),
-        })
-    return words
+def preserve_oneword_srt(source_srt_path, dest_oneword_srt_path):
+    """Keep whisper's one-word-per-line SRT before karaoke overwrites the main .srt."""
+    shutil.copy2(source_srt_path, dest_oneword_srt_path)
+    return True
 
 
-def _group_words_into_segments(words, silence_gap=0.35):
-    """Split a flat word list into speech bursts separated by silence."""
-    if not words:
-        return []
+# Default pause between words that starts a new sentence group (milliseconds).
+TIKTOK_DEFAULT_SENTENCE_PAUSE_MS = 350
 
-    segments = [[words[0]]]
-    for word in words[1:]:
-        gap = word['start'] - segments[-1][-1]['end']
-        if gap > silence_gap:
-            segments.append([word])
-        else:
-            segments[-1].append(word)
-    return segments
+# Whisper one-word SRT often pads silence into a single word's duration; above this
+# ratio we treat the word as a timing artifact and trim / split before it.
+TIKTOK_STRETCHED_WORD_MARGIN_SEC = 0.45
 
-
-STRONG_BREAK_RE = re.compile(r'[.!?…]+["\']?$')
-COMMA_BREAK_RE = re.compile(r',["\']?$')
-COLON_BREAK_RE = re.compile(r':["\']?$')
-DANGLING_STARTERS = frozenset({
-    'a', 'an', 'the', 'i', 'to', 'of', 'in', 'on', 'at', 'it', 'is', 'my', 'we',
-    'he', 'she', 'or', 'and', 'but', 'so', 'if', 'as', 'be', 'do', 'no', 'not',
-})
-DANGLING_ENDINGS = frozenset({
-    'a', 'an', 'the', 'i', 'to', 'of', 'in', 'on', 'at', 'it', 'is', 'my', 'we',
-    'he', 'she', 'or', 'and', 'but', 'so', 'if', 'as', 'be', 'do', 'with', 'for',
-})
-# Idiomatic / grammatical chains — avoid splitting these across lines when possible.
-PHRASE_CHAINS = (
-    ('why', 'the', 'fuck'),
-    ('why', 'the', 'hell'),
-    ('i', "don't", 'know'),
-    ('turn', 'off'),
-    ('low', 'power', 'mode'),
-    ('power', 'mode'),
-    ('ha', 'ha'),
-)
-
-
-def _split_inside_phrase(line_cores, next_core):
-    """Penalty when a break would split a known phrase chain mid-line."""
-    if not line_cores or next_core is None:
-        return 0
-    for chain in PHRASE_CHAINS:
-        for index in range(len(chain) - 1):
-            if line_cores[-1] == chain[index] and next_core == chain[index + 1]:
-                # Breaking before a phrase starts on the next line is fine (e.g. …|why the fuck).
-                if index == 0:
-                    return 0
-                return -90
-    return 0
+SENTENCE_PUNCT_RE = re.compile(r'[.!?…]+["\']?$')
+# Spoken new-thought markers; "so" is handled separately (e.g. keep "so that").
+SENTENCE_STARTER_WORDS = frozenset({'okay', 'now', 'well', 'yeah', 'but'})
 
 
 def _word_piece(word):
     return word['text'].strip()
 
 
-def _word_core(word):
-    return re.sub(r'^[^\w]+|[^\w]+$', '', _word_piece(word).lower())
+def _word_duration(word):
+    return float(word['end']) - float(word['start'])
+
+
+def _expected_word_duration(piece):
+    """Rough max spoken duration from character count (short words stay short)."""
+    length = max(len(piece), 1)
+    return min(0.28 + 0.11 * length, 1.8)
+
+
+def _word_timing_is_stretched(word):
+    piece = _word_piece(word)
+    if not piece:
+        return False
+    return _word_duration(word) > _expected_word_duration(piece) + TIKTOK_STRETCHED_WORD_MARGIN_SEC
+
+
+def _normalize_word_timings(words):
+    """
+    Trim whisper padding where one word's interval absorbs trailing silence.
+
+    Padded words keep their end time but move start forward so later pause
+    detection can see real gaps between phrases.
+    """
+    if not words:
+        return []
+
+    normalized = []
+    for index, word in enumerate(words):
+        piece = _word_piece(word)
+        start = float(word['start'])
+        end = float(word['end'])
+        if piece and _word_timing_is_stretched(word):
+            start = max(start, end - _expected_word_duration(piece))
+        if index > 0 and start < normalized[-1]['end']:
+            start = normalized[-1]['end']
+        if end <= start:
+            end = start + 0.05
+        normalized.append({
+            'start': start,
+            'end': end,
+            'text': word['text'],
+        })
+    return normalized
+
+
+def _split_before_word(prev_piece, piece, next_piece=None):
+    """Heuristic boundaries when whisper omits punctuation."""
+    current = piece.lower()
+    previous = prev_piece.lower()
+
+    if current == 'i' and not previous.endswith("'"):
+        return True
+
+    if current in SENTENCE_STARTER_WORDS:
+        if current == 'now' and previous == 'okay':
+            return False
+        return True
+
+    if current == 'so' and (next_piece or '').lower() == 'that':
+        return False
+
+    return False
 
 
 def _line_display_length(words):
@@ -211,201 +210,165 @@ def _line_display_length(words):
     return sum(len(piece) for piece in pieces) + len(pieces) - 1
 
 
-def _break_score(line_words, max_line_width, next_word=None, comma_break_percent=70):
-    """Score how good a line break is after line_words (higher = better)."""
-    if not line_words:
-        return -10_000
-
-    line_len = _line_display_length(line_words)
-    last_piece = _word_piece(line_words[-1])
-    score = line_len
-
-    if STRONG_BREAK_RE.search(last_piece):
-        score += 120
-    elif COMMA_BREAK_RE.search(last_piece):
-        threshold = max_line_width * (comma_break_percent / 100.0)
-        if line_len >= threshold:
-            score += 80
-        else:
-            score += 25
-    elif COLON_BREAK_RE.search(last_piece):
-        score += 50
-
-    fill_ratio = line_len / max(max_line_width, 1)
-    if fill_ratio >= 0.85:
-        score += 30
-    elif fill_ratio >= 0.65:
-        score += 15
-    elif fill_ratio < 0.35 and not STRONG_BREAK_RE.search(last_piece):
-        score -= 35
-
-    if _word_core(line_words[-1]) in DANGLING_ENDINGS and not STRONG_BREAK_RE.search(last_piece):
-        score -= 45
-
-    if next_word is not None:
-        next_core = _word_core(next_word)
-        line_cores = [_word_core(word) for word in line_words]
-        score += _split_inside_phrase(line_cores, next_core)
-        if next_core in DANGLING_STARTERS and fill_ratio < 0.75:
-            score -= 20
-        if len(line_words) == 1 and next_core in DANGLING_STARTERS:
-            score -= 25
-
-    return score
-
-
-def _incomplete_phrase_at_end(cores):
-    """True when the line ends mid-phrase and should pull more words."""
-    if not cores:
-        return False
-    for chain in PHRASE_CHAINS:
-        for taken in range(1, len(chain)):
-            if cores[-taken:] == list(chain[:taken]):
-                return True
-    return False
-
-
-def _wrap_segment_words(words, max_line_width, comma_break_percent=70):
-    """
-    Break one speech segment into display lines.
-
-    Prefers breaks at punctuation and balanced line lengths instead of a hard
-    character cutoff mid-phrase.
-    """
+def _group_words_into_sentences(
+    words,
+    sentence_pause_sec=0.35,
+    split_on_punctuation=True,
+):
+    """Group flat words into sentence bursts by pause and/or ending punctuation."""
     if not words:
         return []
 
-    lines = []
-    index = 0
-    total = len(words)
-
-    while index < total:
-        best_end = index + 1
-        best_score = -10_000
-
-        for end in range(index + 1, total + 1):
-            line_words = words[index:end]
-            line_len = _line_display_length(line_words)
-            if line_len > max_line_width:
-                break
-
-            next_word = words[end] if end < total else None
-            score = _break_score(
-                line_words,
-                max_line_width,
-                next_word=next_word,
-                comma_break_percent=comma_break_percent,
-            )
-            if score > best_score:
-                best_score = score
-                best_end = end
-
-        if best_end <= index:
-            best_end = index + 1
-
-        # Finish partial phrases (e.g. "why the") when they still fit on the line.
-        while best_end < total:
-            line_words = words[index:best_end]
-            cores = [_word_core(word) for word in line_words]
-            if not _incomplete_phrase_at_end(cores):
-                break
-            extended = words[index:best_end + 1]
-            if _line_display_length(extended) > max_line_width:
-                break
-            best_end += 1
-
-        line_words = words[index:best_end]
-        cores = [_word_core(word) for word in line_words]
-        if _incomplete_phrase_at_end(cores):
-            for chain in PHRASE_CHAINS:
-                for taken in range(1, len(chain)):
-                    if cores[-taken:] == list(chain[:taken]):
-                        best_end -= taken - 1
-                        break
-                else:
-                    continue
-                break
-            if best_end <= index:
-                best_end = index + 1
-
-        lines.append(words[index:best_end])
-        index = best_end
-
-    return _balance_wrapped_lines(lines, max_line_width)
-
-
-def _balance_wrapped_lines(lines, max_line_width):
-    """Pull orphan words across line boundaries when it reads more naturally."""
-    if len(lines) < 2:
-        return lines
-
-    balanced = [list(line) for line in lines]
-
-    for line_index in range(len(balanced) - 1):
-        current = balanced[line_index]
-        nxt = balanced[line_index + 1]
-        if not current or not nxt:
-            continue
-
-        # Move a trailing dangling word down when the next line is a single orphan.
-        if len(nxt) == 1 and _word_core(current[-1]) in DANGLING_ENDINGS:
-            moved = current.pop()
-            trial = [moved] + nxt
-            if _line_display_length(trial) <= max_line_width:
-                balanced[line_index + 1] = trial
-                continue
-
-        # Pull a leading starter word up when the next line would begin with one alone.
-        if len(nxt) == 1 and _word_core(nxt[0]) in DANGLING_STARTERS:
-            trial = current + nxt
-            if _line_display_length(trial) <= max_line_width:
-                balanced[line_index] = trial
-                balanced[line_index + 1] = []
-
-        # Avoid one-word lines sandwiched between longer ones when merge fits.
-        if len(current) == 1 and line_index > 0:
-            prev = balanced[line_index - 1]
-            if prev and _line_display_length(prev + current) <= max_line_width:
-                balanced[line_index - 1] = prev + current
-                balanced[line_index] = []
-
-    return [line for line in balanced if line]
-
-
-def _group_lines(lines, max_line_count):
-    max_line_count = max(1, int(max_line_count))
-    groups = []
-    for index in range(0, len(lines), max_line_count):
-        groups.append(lines[index:index + max_line_count])
+    words = _normalize_word_timings(words)
+    groups = [[words[0]]]
+    for index, word in enumerate(words[1:], start=1):
+        prev = groups[-1][-1]
+        gap = float(word['start']) - float(prev['end'])
+        prev_piece = _word_piece(prev)
+        piece = _word_piece(word)
+        next_piece = _word_piece(words[index + 1]) if index + 1 < len(words) else None
+        new_sentence = gap > sentence_pause_sec
+        if split_on_punctuation and SENTENCE_PUNCT_RE.search(prev_piece):
+            new_sentence = True
+        if _word_timing_is_stretched(word):
+            new_sentence = True
+        if _split_before_word(prev_piece, piece, next_piece):
+            new_sentence = True
+        if new_sentence:
+            groups.append([word])
+        else:
+            groups[-1].append(word)
     return groups
 
 
-def _format_karaoke_block(line_groups, highlight_word_index):
-    """Format one or more lines with a single highlighted word."""
-    flat_words = [word for line in line_groups for word in line]
+def _wrap_words_by_width(words, max_line_width):
+    """Greedy character wrap within one sentence."""
     lines = []
+    current = []
+    current_len = 0
+
+    for word in words:
+        piece = _word_piece(word)
+        if not piece:
+            continue
+        add_len = len(piece) + (1 if current else 0)
+        if current and current_len + add_len > max_line_width:
+            lines.append(current)
+            current = [word]
+            current_len = len(piece)
+        else:
+            current.append(word)
+            current_len += add_len
+
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _line_index_for_word(lines, highlight_index):
     offset = 0
-    for line in line_groups:
+    for index, line in enumerate(lines):
+        if highlight_index < offset + len(line):
+            return index
+        offset += len(line)
+    return max(0, len(lines) - 1)
+
+
+def _visible_lines_window(lines, highlight_index, max_line_count):
+    """Pick up to max_line_count wrapped lines that include the highlighted word."""
+    max_line_count = max(1, int(max_line_count))
+    if not lines:
+        return [], 0
+
+    line_index = _line_index_for_word(lines, highlight_index)
+    start = line_index
+    if start + max_line_count > len(lines):
+        start = max(0, len(lines) - max_line_count)
+    return lines[start:start + max_line_count], start
+
+
+def _format_sentence_highlight(lines, highlight_index, max_line_count=1):
+    """Format wrapped lines with one highlighted word index (flat across lines)."""
+    visible_lines, window_start = _visible_lines_window(
+        lines, highlight_index, max_line_count
+    )
+    offset = sum(len(line) for line in lines[:window_start])
+    rendered = []
+    for line in visible_lines:
         parts = []
-        for local_index, word in enumerate(line):
-            global_index = offset + local_index
-            piece = word['text'].strip()
-            if global_index == highlight_word_index:
+        for word in line:
+            piece = _word_piece(word)
+            if offset == highlight_index:
                 parts.append(f'<u>{piece}</u>')
             else:
                 parts.append(piece)
-        lines.append(' '.join(parts))
-        offset += len(line)
-    return '\n'.join(lines), flat_words
+            offset += 1
+        rendered.append(' '.join(parts))
+    return '\n'.join(rendered)
 
 
-def _cue_end_for_word(word, min_duration=0.05):
-    """Use the word's own end time — no stretching into the next word or silence."""
-    end_sec = float(word['end'])
-    start_sec = float(word['start'])
-    if end_sec <= start_sec:
-        end_sec = start_sec + min_duration
-    return end_sec
+def _build_sentence_group(sentence_words, group_id, max_line_width, max_line_count=1):
+    """Build cues + metadata for one sentence group."""
+    lines = _wrap_words_by_width(sentence_words, max_line_width)
+    words_out = [
+        {
+            'index': index,
+            'text': _word_piece(word),
+            'start': float(word['start']),
+            'end': float(word['end']),
+        }
+        for index, word in enumerate(sentence_words)
+    ]
+
+    cues_out = []
+    srt_cues = []
+    for index, word in enumerate(sentence_words):
+        if index == 0:
+            cue_start = float(word['start'])
+        else:
+            cue_start = float(sentence_words[index - 1]['end'])
+        cue_end = float(word['end'])
+        if cue_end <= cue_start:
+            cue_end = cue_start + 0.05
+
+        text = _format_sentence_highlight(lines, index, max_line_count)
+        cue_entry = {
+            'index': index,
+            'start': cue_start,
+            'end': cue_end,
+            'text': text,
+        }
+        cues_out.append(cue_entry)
+        srt_cues.append({
+            'start': cue_start,
+            'end': cue_end,
+            'text': text,
+        })
+
+    return {
+        'id': group_id,
+        'start': float(sentence_words[0]['start']),
+        'end': float(sentence_words[-1]['end']),
+        'text': ' '.join(_word_piece(word) for word in sentence_words),
+        'lines': [
+            [_word_piece(word) for word in line]
+            for line in lines
+        ],
+        'words': words_out,
+        'cues': cues_out,
+    }, srt_cues
+
+
+def write_captions_json(groups, json_path):
+    """Write TikTok sentence-group caption format."""
+    payload = {
+        'version': 1,
+        'format': 'liver-tiktok-captions',
+        'groups': groups,
+    }
+    with codecs.open(json_path, 'w', encoding='utf-8') as file:
+        json.dump(payload, file, indent=2, ensure_ascii=False)
+        file.write('\n')
 
 
 def build_karaoke_srt_from_words(
@@ -413,37 +376,44 @@ def build_karaoke_srt_from_words(
     srt_path,
     max_line_width=25,
     max_line_count=1,
-    silence_gap=0.35,
-    comma_break_percent=70,
+    sentence_pause_ms=TIKTOK_DEFAULT_SENTENCE_PAUSE_MS,
+    split_on_punctuation=True,
+    captions_json_path=None,
+    **_legacy_kwargs,
 ):
-    """Build rolling <u> highlight SRT from a flat per-word timing list."""
+    """
+    Build TikTok highlight SRT from per-word timings.
+
+    1. Group words into sentences (pause + optional punctuation split)
+    2. Wrap each sentence to max_line_width
+    3. Emit continuous <u> cues within each sentence group (max_line_count lines visible)
+    """
+    del _legacy_kwargs
+
     if not words:
         return False
 
-    segments = _group_words_into_segments(words, silence_gap)
+    sentence_pause_sec = max(float(sentence_pause_ms), 0) / 1000.0
+    sentence_groups = _group_words_into_sentences(
+        words,
+        sentence_pause_sec=sentence_pause_sec,
+        split_on_punctuation=split_on_punctuation,
+    )
 
-    blocks = []
-    for segment_words in segments:
-        lines = _wrap_segment_words(
-            segment_words,
+    groups_out = []
+    srt_cues = []
+    for group_id, sentence_words in enumerate(sentence_groups, start=1):
+        group_data, group_cues = _build_sentence_group(
+            sentence_words,
+            group_id,
             max_line_width,
-            comma_break_percent=comma_break_percent,
+            max_line_count=max_line_count,
         )
-        blocks.extend(_group_lines(lines, max_line_count))
-
-    cues = []
-    for block in blocks:
-        block_words = [word for line in block for word in line]
-        for index in range(len(block_words)):
-            start = block_words[index]['start']
-            end = _cue_end_for_word(block_words[index])
-            if end <= start:
-                end = start + 0.05
-            text, _ = _format_karaoke_block(block, index)
-            cues.append({'start': start, 'end': end, 'text': text})
+        groups_out.append(group_data)
+        srt_cues.extend(group_cues)
 
     lines_out = []
-    for index, cue in enumerate(cues, start=1):
+    for index, cue in enumerate(srt_cues, start=1):
         lines_out.append(str(index))
         lines_out.append(
             f"{_seconds_to_srt_time(cue['start'])} --> "
@@ -455,50 +425,81 @@ def build_karaoke_srt_from_words(
     with codecs.open(srt_path, 'w', encoding='utf-8') as file:
         file.write('\n'.join(lines_out).rstrip() + '\n')
 
+    if captions_json_path:
+        write_captions_json(groups_out, captions_json_path)
+
     return True
+
+
+def read_words_from_captions_json(json_path):
+    """Flatten per-word timings stored in a .captions.json file."""
+    with codecs.open(json_path, 'r', encoding='utf-8-sig') as file:
+        data = json.load(file)
+
+    words = []
+    for group in data.get('groups', []):
+        for entry in group.get('words', []):
+            text = entry.get('text', '')
+            if not text or not str(text).strip():
+                continue
+            start = entry.get('start')
+            end = entry.get('end')
+            if start is None or end is None:
+                continue
+            words.append({
+                'start': float(start),
+                'end': float(end),
+                'text': str(text).strip(),
+            })
+    return words
 
 
 def prepare_karaoke_srt_from_oneword(
     oneword_srt_path,
-    words_json_path,
     output_srt_path,
     max_line_width=25,
     max_line_count=1,
-    silence_gap=0.35,
-    comma_break_percent=70,
+    sentence_pause_ms=TIKTOK_DEFAULT_SENTENCE_PAUSE_MS,
+    split_on_punctuation=True,
+    captions_json_path=None,
+    **_legacy_kwargs,
 ):
-    """Parse one-word-per-line SRT, save .words.json, and build karaoke SRT."""
+    """Parse whisper one-word SRT in memory and build karaoke SRT."""
+    del _legacy_kwargs
     words = parse_words_from_oneword_srt(oneword_srt_path)
     if not words:
         return False
-    write_words_json(words, words_json_path)
     return build_karaoke_srt_from_words(
         words,
         output_srt_path,
         max_line_width=max_line_width,
         max_line_count=max_line_count,
-        silence_gap=silence_gap,
-        comma_break_percent=comma_break_percent,
+        sentence_pause_ms=sentence_pause_ms,
+        split_on_punctuation=split_on_punctuation,
+        captions_json_path=captions_json_path,
     )
 
 
-def rebuild_karaoke_from_words_json(
-    words_json_path,
+def rebuild_karaoke_from_captions_json(
+    captions_json_path,
     output_srt_path,
     max_line_width=25,
     max_line_count=1,
-    silence_gap=0.35,
-    comma_break_percent=70,
+    sentence_pause_ms=TIKTOK_DEFAULT_SENTENCE_PAUSE_MS,
+    split_on_punctuation=True,
+    **_legacy_kwargs,
 ):
-    """Rebuild karaoke SRT from a previously saved .words.json file."""
-    words = read_words_json(words_json_path)
+    """Rebuild karaoke SRT from a previously saved .captions.json file."""
+    del _legacy_kwargs
+    words = read_words_from_captions_json(captions_json_path)
     return build_karaoke_srt_from_words(
         words,
         output_srt_path,
         max_line_width=max_line_width,
         max_line_count=max_line_count,
-        silence_gap=silence_gap,
-        comma_break_percent=comma_break_percent,
+        sentence_pause_ms=sentence_pause_ms,
+        split_on_punctuation=split_on_punctuation,
+        captions_json_path=captions_json_path,
     )
 
 
@@ -507,18 +508,22 @@ def build_karaoke_srt_from_json(
     srt_path,
     max_line_width=25,
     max_line_count=1,
-    silence_gap=0.35,
-    comma_break_percent=70,
+    sentence_pause_ms=TIKTOK_DEFAULT_SENTENCE_PAUSE_MS,
+    split_on_punctuation=True,
+    captions_json_path=None,
+    **_legacy_kwargs,
 ):
     """Legacy fallback when only faster-whisper segment JSON is available."""
+    del _legacy_kwargs
     words = _flatten_words_from_json(json_path)
     return build_karaoke_srt_from_words(
         words,
         srt_path,
         max_line_width=max_line_width,
         max_line_count=max_line_count,
-        silence_gap=silence_gap,
-        comma_break_percent=comma_break_percent,
+        sentence_pause_ms=sentence_pause_ms,
+        split_on_punctuation=split_on_punctuation,
+        captions_json_path=captions_json_path,
     )
 
 

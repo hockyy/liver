@@ -8,8 +8,10 @@ from utils import (
     clean_srt,
     fix_highlight_srt_gaps,
     build_karaoke_srt_from_json,
+    oneword_srt_path,
+    preserve_oneword_srt,
     prepare_karaoke_srt_from_oneword,
-    rebuild_karaoke_from_words_json,
+    rebuild_karaoke_from_captions_json,
     format_timestamp_from_match,
 )
 
@@ -65,22 +67,15 @@ class SubtitleTranscriber:
         lang = options.get('lang', '')
         cjk_srt_file = os.path.join(output_dir, f"{base_name}.srt")
         json_file = os.path.join(output_dir, f"{base_name}.json")
-        words_json_file = os.path.join(output_dir, f"{base_name}.words.json")
+        captions_json_file = os.path.join(output_dir, f"{base_name}.captions.json")
 
         if os.path.exists(cjk_srt_file):
             if self._uses_karaoke_rebuild(options):
-                if os.path.exists(words_json_file):
-                    log_callback(
-                        f"Rebuilding karaoke SRT from {os.path.basename(words_json_file)}\n"
-                    )
-                    self._post_process_srt(
-                        cjk_srt_file, options, log_callback, words_json_file=words_json_file
-                    )
-                    return
                 log_callback(
-                    "Karaoke mode needs per-word timings — re-transcribing "
-                    "(missing .words.json from one-word pass).\n"
+                    "Rebuilding karaoke SRT from existing transcription.\n"
                 )
+                self._post_process_srt(cjk_srt_file, options, log_callback)
+                return
             else:
                 log_callback(f"Transcription already exists at {cjk_srt_file}\n")
                 self._post_process_srt(cjk_srt_file, options, log_callback)
@@ -124,16 +119,11 @@ class SubtitleTranscriber:
 
         # Post-process if transcription completed
         if self._uses_karaoke_rebuild(options):
-            if os.path.exists(words_json_file) or os.path.exists(cjk_srt_file):
+            if os.path.exists(cjk_srt_file):
                 log_callback(
                     "Transcription completed. Building karaoke SRT from per-word timings.\n"
                 )
-                self._post_process_srt(
-                    cjk_srt_file,
-                    options,
-                    log_callback,
-                    words_json_file=words_json_file,
-                )
+                self._post_process_srt(cjk_srt_file, options, log_callback)
             else:
                 log_callback("Transcription failed or was stopped before completion.\n")
         elif os.path.exists(cjk_srt_file):
@@ -151,21 +141,30 @@ class SubtitleTranscriber:
             and not options.get('sentence_split', False)
         )
 
-    def _post_process_srt(self, srt_file, options, log_callback, words_json_file=None):
+    def _post_process_srt(self, srt_file, options, log_callback):
         """Clean SRT output; build or fix karaoke highlight timing."""
         base_dir = os.path.dirname(srt_file)
         base_name = os.path.splitext(os.path.basename(srt_file))[0]
         json_file = os.path.join(base_dir, f"{base_name}.json")
-        if words_json_file is None:
-            words_json_file = os.path.join(base_dir, f"{base_name}.words.json")
+        captions_json_file = os.path.join(base_dir, f"{base_name}.captions.json")
+        oneword_srt_file = oneword_srt_path(srt_file)
 
         max_line_width = options.get('max_line_width', 25)
         max_line_count = options.get('max_line_count', 1)
-        comma_break_percent = self._comma_break_percent(options)
+        sentence_pause_ms = options.get('sentence_pause_ms', 350)
+        split_on_punctuation = options.get('split_on_punctuation', True)
 
         try:
             if self._uses_karaoke_rebuild(options):
                 built = False
+                karaoke_opts = dict(
+                    max_line_width=max_line_width,
+                    max_line_count=max_line_count,
+                    sentence_pause_ms=sentence_pause_ms,
+                    split_on_punctuation=split_on_punctuation,
+                    captions_json_path=captions_json_file,
+                )
+
                 if os.path.exists(srt_file):
                     try:
                         with open(srt_file, encoding='utf-8-sig') as handle:
@@ -173,45 +172,57 @@ class SubtitleTranscriber:
                     except OSError:
                         sample = ''
                     if '<u>' not in sample:
-                        built = prepare_karaoke_srt_from_oneword(
-                            srt_file,
-                            words_json_file,
-                            srt_file,
-                            max_line_width=max_line_width,
-                            max_line_count=max_line_count,
-                            comma_break_percent=comma_break_percent,
+                        preserve_oneword_srt(srt_file, oneword_srt_file)
+                        log_callback(
+                            f"Saved whisper one-word pass → {oneword_srt_file}\n"
                         )
-                        if built:
-                            log_callback(
-                                f"Saved per-word timings → {words_json_file}\n"
-                            )
-                if not built and os.path.exists(words_json_file):
-                    built = rebuild_karaoke_from_words_json(
-                        words_json_file,
+                        built = prepare_karaoke_srt_from_oneword(
+                            oneword_srt_file,
+                            srt_file,
+                            **karaoke_opts,
+                        )
+
+                if not built and os.path.exists(oneword_srt_file):
+                    built = prepare_karaoke_srt_from_oneword(
+                        oneword_srt_file,
+                        srt_file,
+                        **karaoke_opts,
+                    )
+
+                if not built and os.path.exists(captions_json_file):
+                    built = rebuild_karaoke_from_captions_json(
+                        captions_json_file,
                         srt_file,
                         max_line_width=max_line_width,
                         max_line_count=max_line_count,
-                        comma_break_percent=comma_break_percent,
+                        sentence_pause_ms=sentence_pause_ms,
+                        split_on_punctuation=split_on_punctuation,
                     )
+
                 if not built and os.path.exists(json_file):
                     built = build_karaoke_srt_from_json(
                         json_file,
                         srt_file,
-                        max_line_width=max_line_width,
-                        max_line_count=max_line_count,
-                        comma_break_percent=comma_break_percent,
+                        **karaoke_opts,
                     )
+
                 if built:
                     log_callback(
                         f"Built karaoke SRT from per-word timings → {srt_file}\n"
                     )
+                    if os.path.exists(captions_json_file):
+                        log_callback(
+                            f"Saved caption groups → {captions_json_file}\n"
+                        )
                 else:
                     log_callback(
                         "Warning: Could not build karaoke SRT from word timings\n"
                     )
             clean_srt(srt_file)
             log_callback(f"Cleaned {srt_file}\n")
-            if options.get('highlight_words', False) and not os.path.exists(words_json_file):
+            if options.get('highlight_words', False) and not (
+                os.path.exists(captions_json_file) or os.path.exists(oneword_srt_file)
+            ):
                 if fix_highlight_srt_gaps(srt_file):
                     log_callback(
                         "Trimmed legacy highlight cues that spanned silence gaps\n"
@@ -301,7 +312,7 @@ class SubtitleTranscriber:
             command.append('--standard_asia' if lang in ASIAN_LANGUAGES else '--standard')
 
         # Karaoke rebuild uses one-word-per-line SRT for tight timings, then we
-        # save .words.json and assemble highlight captions ourselves.
+        # assemble highlight captions ourselves.
         if karaoke_rebuild:
             command.extend(['--one_word', '2'])
         elif one_word_active:

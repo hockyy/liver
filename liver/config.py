@@ -37,10 +37,15 @@ DIARIZE_METHODS = ['none', 'pyannote_v3.0', 'pyannote_v3.1', 'reverb_v1', 'rever
 # One word per line options (internal — karaoke rebuild uses one_word 2 automatically)
 ONE_WORD_OPTIONS = ['0 - Disabled', '1 - One word/line', '2 - One word + min 50ms']
 
+# Preserved whisper one-word pass — source timings for TikTok karaoke rebuild
+ONEWORD_SRT_SUFFIX = '.oneword.srt'
+
 # Default TikTok caption layout (applied when TikTok mode is enabled)
 TIKTOK_LAYOUT_DEFAULTS = {
     'max_line_width': 25,
     'max_line_count': 1,
+    'sentence_pause_ms': 350,
+    'split_on_punctuation': True,
 }
 
 # Tighter VAD + silence skip when using word highlights (TikTok)

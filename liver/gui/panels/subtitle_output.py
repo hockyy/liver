@@ -13,8 +13,8 @@ from gui.panels.helpers import make_help_label
 
 
 TIKTOK_HELP = (
-    'One timed word per line from Whisper, then local wrap + <u>underline</u> '
-    'highlights. Captions disappear during silence.'
+    'One timed word per line from Whisper, grouped into sentences, then local '
+    'wrap + continuous <u>underline</u> highlights within each sentence.'
 )
 STANDARD_HELP = (
     'Normal subtitles — word-level timing plus a second pass that nudges each '
@@ -31,12 +31,14 @@ PREVIEW_SAMPLE = {
     'short_wrap': "hello hello everyone\nwhy the fuck is it\nlagging I don't know",
     'karaoke_preview': [
         (5.22, 5.54, "I don't know <u>why</u>"),
-        (5.54, 6.39, "<u>turn</u> off the"),
-        (8.66, 8.88, "turn <u>off</u> the"),
-        (8.88, 9.00, "turn off <u>the</u>"),
-        (9.00, 9.22, "<u>low</u> power mode okay now"),
+        (5.54, 6.39, "I don't know why <u>turn</u> off the"),
+        (6.39, 6.58, "I don't know why turn <u>off</u> the"),
+        (6.58, 6.72, "I don't know why turn off <u>the</u>"),
+        (8.66, 8.88, "<u>low</u> power mode okay now"),
+        (8.88, 9.00, "low <u>power</u> mode okay now"),
+        (9.00, 9.22, "low power <u>mode</u> okay now"),
     ],
-    'karaoke_silence_gap': (6.39, 8.66),
+    'karaoke_silence_gap': (6.72, 8.66),
 }
 
 
@@ -117,6 +119,40 @@ class SubtitleOutputPanel(QWidget):
 
         format_layout.addWidget(self.standard_only_widget)
 
+        self.tiktok_only_widget = QWidget()
+        tiktok_only_layout = QVBoxLayout(self.tiktok_only_widget)
+        tiktok_only_layout.setContentsMargins(0, 0, 0, 0)
+
+        pause_row = QHBoxLayout()
+        pause_label = QLabel("Sentence pause:")
+        pause_label.setMinimumWidth(120)
+        self.sentence_pause_spin = QSpinBox()
+        self.sentence_pause_spin.setRange(50, 2000)
+        self.sentence_pause_spin.setSingleStep(50)
+        self.sentence_pause_spin.setSuffix(" ms")
+        self.sentence_pause_spin.setValue(TIKTOK_LAYOUT_DEFAULTS['sentence_pause_ms'])
+        self.sentence_pause_spin.setToolTip(
+            "Gap between words that starts a new sentence group. "
+            "350 ms is a good default for natural speech pauses."
+        )
+        self.sentence_pause_spin.valueChanged.connect(self.update_state)
+        pause_row.addWidget(pause_label)
+        pause_row.addWidget(self.sentence_pause_spin)
+        pause_row.addStretch()
+        tiktok_only_layout.addLayout(pause_row)
+
+        self.split_on_punctuation_check = QCheckBox("Split on punctuation (. ! ? …)")
+        self.split_on_punctuation_check.setChecked(
+            TIKTOK_LAYOUT_DEFAULTS['split_on_punctuation']
+        )
+        self.split_on_punctuation_check.setToolTip(
+            "Start a new sentence group after ending punctuation."
+        )
+        self.split_on_punctuation_check.stateChanged.connect(self.update_state)
+        tiktok_only_layout.addWidget(self.split_on_punctuation_check)
+
+        format_layout.addWidget(self.tiktok_only_widget)
+
         width_row = QHBoxLayout()
         width_label = QLabel("Max chars / line:")
         width_label.setMinimumWidth(120)
@@ -172,6 +208,10 @@ class SubtitleOutputPanel(QWidget):
             self._applying_mode_defaults = True
             self.max_line_width_spin.setValue(TIKTOK_LAYOUT_DEFAULTS['max_line_width'])
             self.max_line_count_spin.setValue(TIKTOK_LAYOUT_DEFAULTS['max_line_count'])
+            self.sentence_pause_spin.setValue(TIKTOK_LAYOUT_DEFAULTS['sentence_pause_ms'])
+            self.split_on_punctuation_check.setChecked(
+                TIKTOK_LAYOUT_DEFAULTS['split_on_punctuation']
+            )
             self._applying_mode_defaults = False
 
         self.update_state()
@@ -203,7 +243,7 @@ class SubtitleOutputPanel(QWidget):
             gap_start, gap_end = sample['karaoke_silence_gap']
             gap_secs = gap_end - gap_start
             note = (
-                f"# TikTok — ~{max_width} chars/line, one <u>word</u> highlighted per cue\n"
+                f"# TikTok — ~{max_width} chars/line, continuous <u>highlight</u> per sentence\n"
                 f"# … no captions from {self._format_preview_time(gap_start)} "
                 f"to {self._format_preview_time(gap_end)} ({gap_secs:.1f}s silence)"
             )
@@ -233,6 +273,7 @@ class SubtitleOutputPanel(QWidget):
 
         self.mode_help.setText(TIKTOK_HELP if tiktok else STANDARD_HELP)
         self.standard_only_widget.setVisible(not tiktok)
+        self.tiktok_only_widget.setVisible(tiktok)
         self.realign_device_widget.setVisible(not tiktok)
 
         if tiktok:
@@ -257,6 +298,8 @@ class SubtitleOutputPanel(QWidget):
             'max_line_width': self.max_line_width_spin.value(),
             'max_line_count': self.max_line_count_spin.value(),
             'max_comma_cent': self.max_comma_cent_combo.currentText(),
+            'sentence_pause_ms': self.sentence_pause_spin.value(),
+            'split_on_punctuation': self.split_on_punctuation_check.isChecked(),
         }
 
     def get_transcription_options(self):
@@ -276,6 +319,8 @@ class SubtitleOutputPanel(QWidget):
         }
         if tiktok:
             options.update(HIGHLIGHT_SILENCE_OPTIONS)
+            options['sentence_pause_ms'] = self.sentence_pause_spin.value()
+            options['split_on_punctuation'] = self.split_on_punctuation_check.isChecked()
         return options
 
     def apply_settings(self, settings):
@@ -299,6 +344,12 @@ class SubtitleOutputPanel(QWidget):
             self.max_line_count_spin.setValue(int(settings['max_line_count']))
         if settings.get('max_comma_cent') in MAX_COMMA_CENT_OPTIONS:
             self.max_comma_cent_combo.setCurrentText(settings['max_comma_cent'])
+        if 'sentence_pause_ms' in settings:
+            self.sentence_pause_spin.setValue(int(settings['sentence_pause_ms']))
+        if 'split_on_punctuation' in settings:
+            self.split_on_punctuation_check.setChecked(
+                bool(settings['split_on_punctuation'])
+            )
 
         self._applying_mode_defaults = False
         self.update_state()
